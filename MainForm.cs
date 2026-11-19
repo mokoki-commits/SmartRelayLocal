@@ -31,6 +31,7 @@ public class MainForm : Form
     private readonly Button _btnOff;
     private readonly Button _btnDiag;
     private readonly System.Windows.Forms.Timer _poll;
+    private readonly ToolTip _tip;
     private readonly int _pollMs;
 
     /// <summary>
@@ -161,12 +162,12 @@ public class MainForm : Form
             form.ShowDialog(this);
         };
 
-        var tip = new ToolTip { AutoPopDelay = 15000, InitialDelay = 400, ReshowDelay = 200 };
-        tip.SetToolTip(_stateLabel,
+        _tip = new ToolTip { AutoPopDelay = 15000, InitialDelay = 400, ReshowDelay = 200 };
+        _tip.SetToolTip(_stateLabel,
             "Время — момент, когда программа увидела переключение." + Environment.NewLine +
             "Розетку можно менять из SmartLife или кнопкой на корпусе —" + Environment.NewLine +
             "состояние обновится автоматически.");
-        tip.SetToolTip(_checkedLabel, "Время последней успешной проверки состояния устройства.");
+        _tip.SetToolTip(_checkedLabel, "Время последней успешной проверки состояния устройства.");
 
         Controls.Add(_stateLabel);
         Controls.Add(_checkedLabel);

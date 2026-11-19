@@ -9,9 +9,9 @@
     <Nullable>enable</Nullable>
 
     <!-- Версия и сведения о программе: попадают в окно «О программе» и в свойства exe -->
-    <Version>5.0.2</Version>
-    <AssemblyVersion>5.0.2</AssemblyVersion>
-    <FileVersion>5.0.2</FileVersion>
+    <Version>5.0.3</Version>
+    <AssemblyVersion>5.0.3</AssemblyVersion>
+    <FileVersion>5.0.3</FileVersion>
     <Product>SmartRelay</Product>
     <Company>avk013</Company>
     <Copyright>© 2026 avk013 · лицензия MIT</Copyright>
