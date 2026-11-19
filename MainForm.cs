@@ -1,40 +1,32 @@
 using System;
 using System.Drawing;
-using System.IO;
-using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace SmartRelay;
 
 /// <summary>
-/// Окно управления розеткой с двумя кнопками: ВКЛ / ВЫКЛ.
+/// Окно управления розеткой: ВКЛ / ВЫКЛ + диагностика.
 /// Надписи на кнопках загружаются из smartrelay.json.
 /// </summary>
-public partial class MainForm : Form
+public class MainForm : Form
 {
     private readonly SmartPlug _plug;
-    private readonly string _btnOnText;
-    private readonly string _btnOffText;
     private readonly Label _statusLabel;
-
     private readonly Button _btnOn;
     private readonly Button _btnOff;
+    private readonly Button _btnDiag;
 
     public MainForm(string devId, string localKey, string ip, int port, int index, int timeoutSec,
         string btnOnText, string btnOffText, string version = "3.1")
     {
-        _btnOnText = btnOnText;
-        _btnOffText = btnOffText;
-
         _plug = new SmartPlug(devId, localKey, ip, port, index, timeoutSec, version);
 
-        // Кнопка ВКЛ
         _btnOn = new Button
         {
-            Text = _btnOnText,
+            Text = btnOnText,
             Location = new Point(20, 40),
-            Size = new Size(120, 45),
+            Size = new Size(145, 50),
             Font = new Font("Segoe UI", 11, FontStyle.Bold),
             BackColor = Color.FromArgb(0, 150, 0),
             ForeColor = Color.White,
@@ -43,12 +35,11 @@ public partial class MainForm : Form
         _btnOn.FlatAppearance.BorderSize = 0;
         _btnOn.Click += async (_, _) => await SetRelayAsync(true);
 
-        // Кнопка ВЫКЛ
         _btnOff = new Button
         {
-            Text = _btnOffText,
-            Location = new Point(160, 40),
-            Size = new Size(120, 45),
+            Text = btnOffText,
+            Location = new Point(180, 40),
+            Size = new Size(145, 50),
             Font = new Font("Segoe UI", 11, FontStyle.Bold),
             BackColor = Color.FromArgb(180, 0, 0),
             ForeColor = Color.White,
@@ -57,49 +48,60 @@ public partial class MainForm : Form
         _btnOff.FlatAppearance.BorderSize = 0;
         _btnOff.Click += async (_, _) => await SetRelayAsync(false);
 
-        // Статус
         _statusLabel = new Label
         {
             Text = "Готово",
-            Location = new Point(20, 105),
-            Size = new Size(300, 25),
+            Location = new Point(20, 98),
+            Size = new Size(305, 40),
             Font = new Font("Segoe UI", 9),
             ForeColor = Color.Gray
         };
 
-        // Форма
+        _btnDiag = new Button
+        {
+            Text = "Диагностика (журнал)",
+            Location = new Point(20, 145),
+            Size = new Size(305, 32),
+            Font = new Font("Segoe UI", 9),
+            FlatStyle = FlatStyle.System
+        };
+        _btnDiag.Click += (_, _) =>
+        {
+            using var form = new DiagForm(_plug);
+            form.ShowDialog(this);
+        };
+
         Text = "SmartRelay — управление розеткой";
-        Size = new Size(340, 170);
+        Size = new Size(361, 228);
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         Padding = new Padding(10);
+
         Controls.Add(_btnOn);
         Controls.Add(_btnOff);
         Controls.Add(_statusLabel);
+        Controls.Add(_btnDiag);
+
+        FormClosed += (_, _) => _plug.Dispose();
     }
 
     private async Task SetRelayAsync(bool on)
     {
-        // Блокируем кнопки во время запроса
         _btnOn.Enabled = false;
         _btnOff.Enabled = false;
+        _btnDiag.Enabled = false;
 
-        string action = on ? "включение" : "выключение";
-        SetStatus($"Выполняется {action}...", Color.Blue);
+        SetStatus(on ? "Выполняется включение..." : "Выполняется выключение...", Color.Blue);
 
         try
         {
-            bool? result = await Task.Run(() => on ? _plug.TurnOn() : _plug.TurnOff());
+            var result = await Task.Run(() => on ? _plug.TurnOn() : _plug.TurnOff());
 
-            if (result == null)
-            {
-                SetStatus("Ответ не получен. Проверьте IP и ключ.", Color.Red);
-            }
+            if (result.Ok)
+                SetStatus(result.Message, Color.Green);
             else
-            {
-                SetStatus(on ? "Розетка ВКЛ." : "Розетка ВЫКЛ.", Color.Green);
-            }
+                SetStatus("ОШИБКА: " + result.Message + "  Откройте «Диагностика (журнал)».", Color.Red);
         }
         catch (Exception ex)
         {
@@ -109,6 +111,7 @@ public partial class MainForm : Form
         {
             _btnOn.Enabled = true;
             _btnOff.Enabled = true;
+            _btnDiag.Enabled = true;
         }
     }
 
