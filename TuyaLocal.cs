@@ -18,6 +18,7 @@ public static class TuyaProtocol
     public const byte CmdStatus = 0x08;
     public const byte CmdDpQuery = 0x0A;
     public const byte CmdSessKeyNegStart = 0x03;
+    public const byte CmdSessKeyNegResp = 0x04;
     public const byte CmdSessKeyNegFinish = 0x05;
 
     private static readonly uint[] Crc32Table = BuildCrc32Table();
@@ -35,7 +36,7 @@ public static class TuyaProtocol
         return table;
     }
 
-    private static uint Crc32(byte[] data, int length)
+    public static uint Crc32(byte[] data, int length)
     {
         uint crc = 0xFFFFFFFF;
         for (int i = 0; i < length; i++)
@@ -99,56 +100,10 @@ public static class TuyaProtocol
         return hmac.ComputeHash(data);
     }
 
-    private static byte[] Md5(byte[] data)
-    {
-        using var md5 = MD5.Create();
-        return md5.ComputeHash(data);
-    }
-
-    public static byte[] BuildFrame31(string devId, byte[] localKey, byte cmd, Dictionary<string, object> dps, ref uint seqno)
-    {
-        seqno = (seqno + 1) & 0xFFFFFFFF;
-
-        var json = new Dictionary<string, object>
-        {
-            ["gwId"] = devId,
-            ["devId"] = devId,
-            ["uid"] = "",
-            ["t"] = ((int)(DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalSeconds).ToString(),
-        };
-        if (dps != null)
-            json["dps"] = dps;
-
-        string jsonStr = JsonSerializer.Serialize(json);
-        byte[] payload = Encoding.UTF8.GetBytes(jsonStr);
-
-        byte[] encrypted = AesEcbEncrypt(localKey, payload);
-        string b64 = Convert.ToBase64String(encrypted);
-
-        string keyStr = Encoding.Latin1.GetString(localKey);
-        string pre = "data=" + b64 + "||lpv=3.1||" + keyStr;
-        byte[] md5Bytes = MD5.HashData(Encoding.UTF8.GetBytes(pre));
-        string md5Hex = Convert.ToHexString(md5Bytes).ToLowerInvariant();
-        string md5Slice = md5Hex.Substring(8, 16);
-
-        byte[] msgPayload = Encoding.UTF8.GetBytes("3.1" + md5Slice + b64);
-
-        using var ms = new MemoryStream();
-        using var bw = new BinaryWriter(ms, Encoding.ASCII, leaveOpen: true);
-        bw.Write(Prefix);
-        bw.Write(seqno);
-        bw.Write(cmd);
-        bw.Write(msgPayload.Length + 8);
-        bw.Write(msgPayload);
-
-        byte[] headerAndBody = ms.ToArray();
-        uint crc = Crc32(headerAndBody, headerAndBody.Length);
-        bw.Write(crc);
-        bw.Write(Suffix);
-
-        return ms.ToArray();
-    }
-
+    /// <summary>
+    /// Построить кадр Tuya 3.4 с сессионным ключом.
+    /// Формат: header(16) + AES-ECB(sessionKey, version_header(15) + JSON) + HMAC-SHA256(sessionKey, header+encrypted) + suffix(4)
+    /// </summary>
     public static byte[] BuildFrame34(string devId, byte[] sessionKey, byte cmd, Dictionary<string, object> dps, ref uint seqno, bool includeVersionHeader = true)
     {
         seqno = (seqno + 1) & 0xFFFFFFFF;
@@ -182,7 +137,7 @@ public static class TuyaProtocol
         bw.Write(Prefix);
         bw.Write(seqno);
         bw.Write(cmd);
-        bw.Write(encrypted.Length + 32 + 4);
+        bw.Write(encrypted.Length + 32 + 4); // length = encrypted + HMAC + suffix
         bw.Write(encrypted);
 
         byte[] headerAndBody = ms.ToArray();
@@ -193,44 +148,33 @@ public static class TuyaProtocol
         return ms.ToArray();
     }
 
-    public static bool TryParseFrame31(byte[] raw, out Frame frame)
+    /// <summary>
+    /// Построить кадр для согласования ключа (шаг 1 и 3).
+    /// Payload шифруется ключом localKey (не сессионным!).
+    /// </summary>
+    public static byte[] BuildNegotiationFrame(string devId, byte[] localKey, byte cmd, byte[] payload, ref uint seqno)
     {
-        frame = null;
-        if (raw == null || raw.Length < 24)
-            return false;
+        seqno = (seqno + 1) & 0xFFFFFFFF;
 
-        uint prefix = BitConverter.ToUInt32(raw, 0);
-        if (prefix != Prefix)
-            return false;
+        byte[] encrypted = AesEcbEncrypt(localKey, payload);
 
-        uint seqno = BitConverter.ToUInt32(raw, 4);
-        uint cmd = BitConverter.ToUInt32(raw, 8);
-        uint length = BitConverter.ToUInt32(raw, 12);
-        int frameLength = (int)length;
+        using var ms = new MemoryStream();
+        using var bw = new BinaryWriter(ms, Encoding.ASCII, leaveOpen: true);
+        bw.Write(Prefix);
+        bw.Write(seqno);
+        bw.Write(cmd);
+        bw.Write(encrypted.Length + 32 + 4);
+        bw.Write(encrypted);
 
-        if (raw.Length < 16 + frameLength)
-            return false;
+        byte[] headerAndBody = ms.ToArray();
+        byte[] hmac = HmacSha256(localKey, headerAndBody);
+        bw.Write(hmac);
+        bw.Write(Suffix);
 
-        byte[] body = new byte[frameLength];
-        Array.Copy(raw, 16, body, 0, frameLength);
-
-        int payloadLen = frameLength - 8;
-        byte[] msgPayload = new byte[payloadLen];
-        Array.Copy(body, 0, msgPayload, 0, payloadLen);
-
-        uint crc = BitConverter.ToUInt32(body, payloadLen);
-        uint suffix = BitConverter.ToUInt32(body, frameLength - 4);
-        if (suffix != Suffix)
-            return false;
-
-        uint calcCrc = Crc32(raw, 16 + payloadLen);
-        if (calcCrc != crc)
-            return false;
-
-        frame = new Frame(seqno, (byte)cmd, msgPayload);
-        return true;
+        return ms.ToArray();
     }
 
+    /// <summary>Разобрать ответ Tuya 3.4 с сессионным ключом.</summary>
     public static bool TryParseFrame34(byte[] raw, byte[] sessionKey, out Frame frame)
     {
         frame = null;
@@ -271,6 +215,7 @@ public static class TuyaProtocol
 
         byte[] decrypted = AesEcbDecrypt(sessionKey, encrypted);
 
+        // Удалить заголовок версии (15 байт), если есть
         if (decrypted.Length > 15 && Encoding.ASCII.GetString(decrypted, 0, 3) == "3.4")
         {
             var jsonBytes = new byte[decrypted.Length - 15];
@@ -278,6 +223,50 @@ public static class TuyaProtocol
             decrypted = jsonBytes;
         }
 
+        frame = new Frame(seqno, (byte)cmd, decrypted);
+        return true;
+    }
+
+    /// <summary>Разобрать ответ на согласование ключа (шифрован localKey).</summary>
+    public static bool TryParseNegotiationResponse(byte[] raw, byte[] localKey, out Frame frame)
+    {
+        frame = null;
+        if (raw == null || raw.Length < 16 + 32 + 4)
+            return false;
+
+        uint prefix = BitConverter.ToUInt32(raw, 0);
+        if (prefix != Prefix)
+            return false;
+
+        uint seqno = BitConverter.ToUInt32(raw, 4);
+        uint cmd = BitConverter.ToUInt32(raw, 8);
+        uint length = BitConverter.ToUInt32(raw, 12);
+        int frameLength = (int)length;
+
+        if (raw.Length < 16 + frameLength)
+            return false;
+
+        int hmacOffset = frameLength - 32 - 4;
+        int encryptedLen = hmacOffset;
+
+        byte[] encrypted = new byte[encryptedLen];
+        Array.Copy(raw, 16, encrypted, 0, encryptedLen);
+
+        byte[] hmacReceived = new byte[32];
+        Array.Copy(raw, 16 + encryptedLen, hmacReceived, 0, 32);
+
+        uint suffix = BitConverter.ToUInt32(raw, 16 + frameLength - 4);
+        if (suffix != Suffix)
+            return false;
+
+        byte[] headerAndBody = new byte[16 + encryptedLen];
+        Array.Copy(raw, 0, headerAndBody, 0, 16 + encryptedLen);
+        byte[] hmacCalc = HmacSha256(localKey, headerAndBody);
+
+        if (!hmacReceived.SequenceEqual(hmacCalc))
+            return false;
+
+        byte[] decrypted = AesEcbDecrypt(localKey, encrypted);
         frame = new Frame(seqno, (byte)cmd, decrypted);
         return true;
     }
@@ -307,15 +296,13 @@ public static class TuyaProtocol
         return nonce;
     }
 
-    public static byte[] DeriveSessionKey(byte[] nonce1, byte[] nonce2)
+    /// <summary>Сессионный ключ = local_nonce XOR remote_nonce (байт-в-байт).</summary>
+    public static byte[] DeriveSessionKeyXor(byte[] nonce1, byte[] nonce2)
     {
-        var combined = new byte[nonce1.Length + nonce2.Length];
-        Array.Copy(nonce1, combined, nonce1.Length);
-        Array.Copy(nonce2, 0, combined, nonce1.Length, nonce2.Length);
-        byte[] md5 = Md5(combined);
-        var sessionKey = new byte[16];
-        Array.Copy(md5, sessionKey, 16);
-        return sessionKey;
+        var result = new byte[16];
+        for (int i = 0; i < 16; i++)
+            result[i] = (byte)(nonce1[i] ^ nonce2[i]);
+        return result;
     }
 
     public sealed class Frame

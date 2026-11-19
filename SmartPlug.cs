@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
@@ -63,17 +64,8 @@ public class SmartPlug
                 {
                     uint length = BitConverter.ToUInt32(ms.GetBuffer(), 12);
                     int frameLength = (int)length;
-
-                    if (Version == "3.4")
-                    {
-                        if (ms.Length >= 16 + frameLength)
-                            break;
-                    }
-                    else
-                    {
-                        if (ms.Length >= 16 + frameLength)
-                            break;
-                    }
+                    if (ms.Length >= 16 + frameLength)
+                        break;
                 }
             }
             catch (SocketException)
@@ -84,75 +76,53 @@ public class SmartPlug
         return ms.Length > 0 ? ms.ToArray() : null;
     }
 
-    /// <summary>Выполнить согласование сессионного ключа для протокола 3.4.</summary>
+    /// <summary>Согласование сессионного ключа для протокола 3.4 (по схеме tinytuya).</summary>
     private bool NegotiateSessionKey()
     {
         if (_sessionNegotiated && _sessionKey != null)
             return true;
 
-        byte[] nonce1 = TuyaProtocol.GenerateNonce(16);
+        // Шаг 1: SESS_KEY_NEG_START (0x03) — enviar локальный nonce (сырые 16 байт, НЕ JSON!)
+        byte[] localNonce = TuyaProtocol.GenerateNonce(16);
 
-        var negJson = new Dictionary<string, object>
-        {
-            ["gwId"] = DevId,
-            ["devId"] = DevId,
-            ["uid"] = "",
-            ["t"] = ((int)(DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalSeconds).ToString(),
-            ["nonce1"] = Convert.ToBase64String(nonce1)
-        };
-
-        string negJsonStr = JsonSerializer.Serialize(negJson);
-        byte[] negPayload = Encoding.UTF8.GetBytes(negJsonStr);
-
-        byte[] encrypted = TuyaProtocol.AesEcbEncrypt(LocalKey, negPayload);
-
-        using var ms = new MemoryStream();
-        using var bw = new BinaryWriter(ms, Encoding.ASCII, leaveOpen: true);
-        bw.Write(TuyaProtocol.Prefix);
-        bw.Write((_seqno + 1) & 0xFFFFFFFF);
-        bw.Write(TuyaProtocol.CmdSessKeyNegStart);
-        bw.Write(encrypted.Length + 32 + 4);
-        bw.Write(encrypted);
-
-        byte[] headerAndBody = ms.ToArray();
-        byte[] hmac = TuyaProtocol.HmacSha256(LocalKey, headerAndBody);
-        bw.Write(hmac);
-        bw.Write(TuyaProtocol.Suffix);
-
-        byte[] frame = ms.ToArray();
-        _seqno = (uint)((_seqno + 1) & 0xFFFFFFFF);
-
-        byte[] raw = SendRecv(frame, waitResponse: true);
+        byte[] step1Frame = TuyaProtocol.BuildNegotiationFrame(DevId, LocalKey, TuyaProtocol.CmdSessKeyNegStart, localNonce, ref _seqno);
+        byte[] raw = SendRecv(step1Frame, waitResponse: true);
         if (raw == null)
             return false;
 
-        if (!TuyaProtocol.TryParseFrame34(raw, LocalKey, out var respFrame))
+        // Шаг 2: Разобрать SESS_KEY_NEG_RESP (0x04)
+        if (!TuyaProtocol.TryParseNegotiationResponse(raw, LocalKey, out var respFrame))
             return false;
 
-        byte[] decrypted = TuyaProtocol.AesEcbDecrypt(LocalKey, respFrame.Payload);
-        string text = Encoding.UTF8.GetString(decrypted);
-
-        string? nonce2B64 = null;
-        try
-        {
-            using var doc = JsonDocument.Parse(text);
-            if (doc.RootElement.TryGetProperty("nonce2", out var el))
-                nonce2B64 = el.GetString();
-        }
-        catch { return false; }
-
-        if (string.IsNullOrEmpty(nonce2B64))
+        if (respFrame.Cmd != TuyaProtocol.CmdSessKeyNegResp)
             return false;
 
-        byte[] nonce2 = Convert.FromBase64String(nonce2B64);
+        byte[] payload = respFrame.Payload;
+        if (payload.Length < 48)
+            return false;
 
-        _sessionKey = TuyaProtocol.DeriveSessionKey(nonce1, nonce2);
+        // remote_nonce = первые 16 байт
+        byte[] remoteNonce = new byte[16];
+        Array.Copy(payload, 0, remoteNonce, 0, 16);
 
-        byte[] finishFrame = TuyaProtocol.BuildFrame34(DevId, _sessionKey, TuyaProtocol.CmdSessKeyNegFinish, null, ref _seqno, includeVersionHeader: false);
-        byte[] finishRaw = SendRecv(finishFrame, waitResponse: true);
+        // HMAC-SHA256(localKey, localNonce) = байты 16-47
+        byte[] expectedHmac = TuyaProtocol.HmacSha256(LocalKey, localNonce);
+        byte[] receivedHmac = new byte[32];
+        Array.Copy(payload, 16, receivedHmac, 0, 32);
 
-        _sessionNegotiated = finishRaw != null;
-        return _sessionNegotiated;
+        if (!expectedHmac.SequenceEqual(receivedHmac))
+            return false;
+
+        // Шаг 3: SESS_KEY_NEG_FINISH (0x05) — HMAC-SHA256(localKey, remoteNonce) (32 байта)
+        byte[] finishPayload = TuyaProtocol.HmacSha256(LocalKey, remoteNonce);
+        byte[] step3Frame = TuyaProtocol.BuildNegotiationFrame(DevId, LocalKey, TuyaProtocol.CmdSessKeyNegFinish, finishPayload, ref _seqno);
+        byte[] step3Raw = SendRecv(step3Frame, waitResponse: false);
+
+        // Финализировать: sessionKey = localNonce XOR remoteNonce
+        _sessionKey = TuyaProtocol.DeriveSessionKeyXor(localNonce, remoteNonce);
+        _sessionNegotiated = true;
+
+        return true;
     }
 
     public bool? Set(bool value)
@@ -180,10 +150,10 @@ public class SmartPlug
         else
         {
             var dps = new Dictionary<string, object> { [Index.ToString()] = value };
-            byte[] frame = TuyaProtocol.BuildFrame31(DevId, LocalKey, TuyaProtocol.CmdControl, dps, ref _seqno);
+            byte[] frame = BuildFrame31(DevId, LocalKey, TuyaProtocol.CmdControl, dps, ref _seqno);
             byte[] raw = SendRecv(frame, waitResponse: true);
 
-            if (raw != null && TuyaProtocol.TryParseFrame31(raw, out var fr))
+            if (raw != null && TryParseFrame31(raw, out var fr))
             {
                 var decoded = DecodeResponse31(LocalKey, fr.Payload);
                 if (decoded != null && decoded.TryGetValue("dps", out var dpsEl) && dpsEl.ValueKind == JsonValueKind.Object)
@@ -219,10 +189,10 @@ public class SmartPlug
         }
         else
         {
-            byte[] frame = TuyaProtocol.BuildFrame31(DevId, LocalKey, TuyaProtocol.CmdStatus, null, ref _seqno);
+            byte[] frame = BuildFrame31(DevId, LocalKey, TuyaProtocol.CmdStatus, null, ref _seqno);
             byte[] raw = SendRecv(frame, waitResponse: true);
 
-            if (raw != null && TuyaProtocol.TryParseFrame31(raw, out var fr))
+            if (raw != null && TryParseFrame31(raw, out var fr))
             {
                 var decoded = DecodeResponse31(LocalKey, fr.Payload);
                 if (decoded != null && decoded.TryGetValue("dps", out var dpsEl) && dpsEl.ValueKind == JsonValueKind.Object)
@@ -233,6 +203,90 @@ public class SmartPlug
             }
             return null;
         }
+    }
+
+    // ========== Tuya 3.1 (legacy) ==========
+
+    private static byte[] BuildFrame31(string devId, byte[] localKey, byte cmd, Dictionary<string, object> dps, ref uint seqno)
+    {
+        seqno = (seqno + 1) & 0xFFFFFFFF;
+
+        var json = new Dictionary<string, object>
+        {
+            ["gwId"] = devId,
+            ["devId"] = devId,
+            ["uid"] = "",
+            ["t"] = ((int)(DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalSeconds).ToString(),
+        };
+        if (dps != null)
+            json["dps"] = dps;
+
+        string jsonStr = JsonSerializer.Serialize(json);
+        byte[] payload = Encoding.UTF8.GetBytes(jsonStr);
+
+        byte[] encrypted = TuyaProtocol.AesEcbEncrypt(localKey, payload);
+        string b64 = Convert.ToBase64String(encrypted);
+
+        string keyStr = Encoding.Latin1.GetString(localKey);
+        string pre = "data=" + b64 + "||lpv=3.1||" + keyStr;
+        byte[] md5Bytes = MD5.HashData(Encoding.UTF8.GetBytes(pre));
+        string md5Hex = Convert.ToHexString(md5Bytes).ToLowerInvariant();
+        string md5Slice = md5Hex.Substring(8, 16);
+
+        byte[] msgPayload = Encoding.UTF8.GetBytes("3.1" + md5Slice + b64);
+
+        using var ms = new MemoryStream();
+        using var bw = new BinaryWriter(ms, Encoding.ASCII, leaveOpen: true);
+        bw.Write(TuyaProtocol.Prefix);
+        bw.Write(seqno);
+        bw.Write(cmd);
+        bw.Write(msgPayload.Length + 8);
+        bw.Write(msgPayload);
+
+        byte[] headerAndBody = ms.ToArray();
+        uint crc = TuyaProtocol.Crc32(headerAndBody, headerAndBody.Length);
+        bw.Write(crc);
+        bw.Write(TuyaProtocol.Suffix);
+
+        return ms.ToArray();
+    }
+
+    private static bool TryParseFrame31(byte[] raw, out TuyaProtocol.Frame frame)
+    {
+        frame = null;
+        if (raw == null || raw.Length < 24)
+            return false;
+
+        uint prefix = BitConverter.ToUInt32(raw, 0);
+        if (prefix != TuyaProtocol.Prefix)
+            return false;
+
+        uint seqno = BitConverter.ToUInt32(raw, 4);
+        uint cmd = BitConverter.ToUInt32(raw, 8);
+        uint length = BitConverter.ToUInt32(raw, 12);
+        int frameLength = (int)length;
+
+        if (raw.Length < 16 + frameLength)
+            return false;
+
+        byte[] body = new byte[frameLength];
+        Array.Copy(raw, 16, body, 0, frameLength);
+
+        int payloadLen = frameLength - 8;
+        byte[] msgPayload = new byte[payloadLen];
+        Array.Copy(body, 0, msgPayload, 0, payloadLen);
+
+        uint crc = BitConverter.ToUInt32(body, payloadLen);
+        uint suffix = BitConverter.ToUInt32(body, frameLength - 4);
+        if (suffix != TuyaProtocol.Suffix)
+            return false;
+
+        uint calcCrc = TuyaProtocol.Crc32(raw, 16 + payloadLen);
+        if (calcCrc != crc)
+            return false;
+
+        frame = new TuyaProtocol.Frame(seqno, (byte)cmd, msgPayload);
+        return true;
     }
 
     private static Dictionary<string, JsonElement>? DecodeResponse31(byte[] localKey, byte[] payload)
