@@ -2,11 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
+using System.Windows.Forms;
 
 namespace SmartRelay;
 
 class Program
 {
+    [STAThread]
     static int Main(string[] args)
     {
         string? devId = null;
@@ -17,6 +19,7 @@ class Program
         int timeoutSec = 5;
         string configPath = "smartrelay.json";
         string? action = null;
+        bool guiMode = true;
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -29,13 +32,19 @@ class Program
                 case "--index": index = int.Parse(args[++i]); break;
                 case "--timeout": timeoutSec = int.Parse(args[++i]); break;
                 case "--config": configPath = args[++i]; break;
-                case "on": case "off": case "status": case "toggle": action = args[i]; break;
+                case "on": case "off": case "status": case "toggle": action = args[i]; guiMode = false; break;
+                case "--gui": guiMode = true; break;
+                case "--cli": guiMode = false; break;
                 case "--help":
                 case "-h":
                     PrintHelp();
                     return 0;
             }
         }
+
+        string? cfgDevId = null, cfgKey = null, cfgIp = null;
+        int cfgPort = port, cfgIndex = index, cfgTimeout = timeoutSec;
+        string cfgBtnOn = "ВКЛ", cfgBtnOff = "ВЫКЛ";
 
         if (File.Exists(configPath))
         {
@@ -44,15 +53,47 @@ class Program
                 var json = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(File.ReadAllText(configPath));
                 if (json != null)
                 {
-                    devId ??= GetStr(json, "dev_id");
-                    localKey ??= GetStr(json, "local_key");
-                    ip ??= GetStr(json, "ip");
-                    if (port == TuyaProtocol.DefaultPort && json.TryGetValue("port", out var p)) port = p.GetInt32();
-                    if (index == 1 && json.TryGetValue("index", out var ix)) index = ix.GetInt32();
-                    if (timeoutSec == 5 && json.TryGetValue("timeout", out var t)) timeoutSec = t.GetInt32();
+                    cfgDevId = GetStr(json, "dev_id");
+                    cfgKey = GetStr(json, "local_key");
+                    cfgIp = GetStr(json, "ip");
+                    if (json.TryGetValue("port", out var p)) cfgPort = p.GetInt32();
+                    if (json.TryGetValue("index", out var ix)) cfgIndex = ix.GetInt32();
+                    if (json.TryGetValue("timeout", out var t)) cfgTimeout = t.GetInt32();
+                    cfgBtnOn = GetStr(json, "btnOnText") ?? "ВКЛ";
+                    cfgBtnOff = GetStr(json, "btnOffText") ?? "ВЫКЛ";
                 }
             }
             catch { }
+        }
+
+        devId ??= cfgDevId;
+        localKey ??= cfgKey;
+        ip ??= cfgIp;
+        port = cfgPort;
+        index = cfgIndex;
+        timeoutSec = cfgTimeout;
+
+        if (guiMode && action == null)
+        {
+            if (string.IsNullOrWhiteSpace(devId) ||
+                string.IsNullOrWhiteSpace(localKey) ||
+                string.IsNullOrWhiteSpace(ip))
+            {
+                MessageBox.Show(
+                    "Не заданы Device ID, Local Key или IP.\n" +
+                    "Укажите их в файле smartrelay.json или через аргументы командной строки.\n\n" +
+                    "Пример: SmartRelay.exe --id ... --key ... --ip ...",
+                    "SmartRelay — ошибка конфигурации",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+                PrintHelp();
+                return 2;
+            }
+
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+            Application.Run(new MainForm(devId, localKey, ip, port, index, timeoutSec, cfgBtnOn, cfgBtnOff));
+            return 0;
         }
 
         if (string.IsNullOrWhiteSpace(devId) ||
@@ -130,7 +171,11 @@ class Program
     {
         Console.WriteLine("SmartRelay — локальное управление розеткой SmartLife / Tuya без интернета.");
         Console.WriteLine();
-        Console.WriteLine("Использование:");
+        Console.WriteLine("ГУИ (по умолчанию, без аргументов):");
+        Console.WriteLine("  SmartRelay.exe");
+        Console.WriteLine("  (кнопки ВКЛ / ВЫКЛ, надписи из smartrelay.json)");
+        Console.WriteLine();
+        Console.WriteLine("CLI режим:");
         Console.WriteLine("  SmartRelay.exe --id <DEVICE_ID> --key <LOCAL_KEY> --ip <IP> [действие]");
         Console.WriteLine();
         Console.WriteLine("Действия: on | off | status | toggle");
@@ -143,6 +188,8 @@ class Program
         Console.WriteLine("  --index     Номер точки данных DP (по умолчанию 1)");
         Console.WriteLine("  --timeout   Таймаут сети, сек (по умолчанию 5)");
         Console.WriteLine("  --config    Путь к JSON-конфигу (по умолчанию smartrelay.json)");
+        Console.WriteLine("  --gui       Запустить графическое окно (по умолчанию)");
+        Console.WriteLine("  --cli       Запустить в консольном режиме");
         Console.WriteLine();
         Console.WriteLine("Примеры:");
         Console.WriteLine("  SmartRelay.exe --id 0123456789abcdef0123 --key abcd1234efgh5678 --ip 192.168.1.42 on");
@@ -161,7 +208,9 @@ class Program
         Console.WriteLine("    \"ip\": \"192.168.1.42\",");
         Console.WriteLine("    \"port\": 6668,");
         Console.WriteLine("    \"index\": 1,");
-        Console.WriteLine("    \"timeout\": 5");
+        Console.WriteLine("    \"timeout\": 5,");
+        Console.WriteLine("    \"btnOnText\": \"ВКЛ\",");
+        Console.WriteLine("    \"btnOffText\": \"ВЫКЛ\"");
         Console.WriteLine("  }");
     }
 }
