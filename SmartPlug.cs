@@ -301,24 +301,45 @@ public class SmartPlug : IDisposable
         Diag.Hex("→ SESS_KEY_NEG_FINISH (0x05)", step3);
         Send(step3);
 
-        _sessionKey = TuyaProtocol.DeriveSessionKeyXor(localNonce, remoteNonce);
-        Diag.Hex("   сессионный ключ (nonce1 XOR nonce2)", _sessionKey);
+        _sessionKey = TuyaProtocol.DeriveSessionKey34(LocalKey, localNonce, remoteNonce);
+        Diag.Hex("   сессионный ключ = AES-ECB(local_key, nonce1 XOR nonce2)", _sessionKey);
         Diag.Log("3.4: сессионный ключ согласован успешно");
         return true;
     }
 
-    private PlugResult Execute(byte cmd, Dictionary<string, object>? dps)
+    /// <summary>
+    /// Отправить команду и разобрать ответ.
+    /// 3.4+: CONTROL_NEW (0x0D) с {"protocol":5,"t":...,"data":{"dps":...}} и
+    /// DP_QUERY_NEW (0x10) с "{}"; 3.1: старые 0x07/0x0A с плоским JSON.
+    /// </summary>
+    private PlugResult Execute(bool query, Dictionary<string, object>? dps)
     {
         try
         {
             EnsureConnected();
 
-            byte[] frame = VersionNumber >= 3.4
-                ? TuyaProtocol.BuildFrame34(DevId, _sessionKey!, cmd, dps, ref _seqno, Version)
-                : TuyaProtocol.BuildFrame31(DevId, LocalKey, cmd, dps, ref _seqno);
+            byte cmd;
+            byte[] frame;
+
+            if (VersionNumber >= 3.4)
+            {
+                cmd = query ? TuyaProtocol.CmdStatusNew : TuyaProtocol.CmdControlNew;
+                string json = query
+                    ? TuyaProtocol.EmptyJson34
+                    : TuyaProtocol.BuildJson34Control(dps!);
+                Diag.Detail($"   JSON для 3.4: {json}");
+                frame = TuyaProtocol.BuildFrame34(_sessionKey!, cmd, json, ref _seqno, Version);
+            }
+            else
+            {
+                cmd = query ? TuyaProtocol.CmdDpQuery : TuyaProtocol.CmdControl;
+                frame = TuyaProtocol.BuildFrame31(DevId, LocalKey, cmd, dps, ref _seqno);
+            }
 
             Diag.Hex($"→ отправка cmd=0x{cmd:X2} (порт {ActivePort}, версия {Version})", frame);
             Send(frame);
+
+            string lastPayloadText = "";
 
             for (int attempt = 0; attempt < 4; attempt++)
             {
@@ -355,10 +376,14 @@ public class SmartPlug : IDisposable
                     }
 
                     Diag.Hex($"   расшифровано (cmd=0x{fr.Cmd:X2}, retcode={fr.Retcode})", payload);
+                    lastPayloadText = SafeText(payload);
+                    if (lastPayloadText.Length > 0)
+                        Diag.Detail("   ответ устройства: " + Shorten(lastPayloadText));
 
                     if (fr.Retcode != 0)
                     {
-                        LastError = $"устройство вернуло retcode={fr.Retcode}";
+                        LastError = $"устройство вернуло retcode={fr.Retcode}" +
+                                    (lastPayloadText.Length > 0 ? $": {Shorten(lastPayloadText)}" : "");
                         return PlugResult.Fail(LastError);
                     }
 
@@ -368,7 +393,8 @@ public class SmartPlug : IDisposable
                 }
             }
 
-            LastError = $"Ответ получен, но DP \"{Index}\" в нём не найден (проверьте \"index\" в конфиге).";
+            LastError = $"Ответ получен, но DP \"{Index}\" в нём не найден (проверьте \"index\" в конфиге)." +
+                        (lastPayloadText.Length > 0 ? $" Ответ устройства: {Shorten(lastPayloadText)}" : "");
             return PlugResult.Fail(LastError);
         }
         catch (TuyaException ex)
@@ -384,6 +410,15 @@ public class SmartPlug : IDisposable
             return PlugResult.Fail(LastError);
         }
     }
+
+    private static string SafeText(byte[] payload)
+    {
+        try { return Encoding.UTF8.GetString(payload).Trim('\0', ' ', '\r', '\n'); }
+        catch { return ""; }
+    }
+
+    private static string Shorten(string text, int max = 200) =>
+        text.Length <= max ? text : text.Substring(0, max) + "…";
 
     private bool? TryExtractDp(byte[] payload)
     {
@@ -422,12 +457,12 @@ public class SmartPlug : IDisposable
     public PlugResult Set(bool value)
     {
         var dps = new Dictionary<string, object> { [Index.ToString()] = value };
-        return Execute(TuyaProtocol.CmdControl, dps);
+        return Execute(query: false, dps);
     }
 
     public PlugResult TurnOn() => Set(true);
     public PlugResult TurnOff() => Set(false);
-    public PlugResult Status() => Execute(TuyaProtocol.CmdDpQuery, null);
+    public PlugResult Status() => Execute(query: true, null);
 
     public PlugResult Toggle()
     {

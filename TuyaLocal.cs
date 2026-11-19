@@ -25,6 +25,9 @@ public static class TuyaProtocol
     public const byte CmdControl = 0x07;
     public const byte CmdStatus = 0x08;
     public const byte CmdDpQuery = 0x0A;
+    // В протоколе 3.4+ используются "новые" команды (как в tinytuya: payload_dict["v3.4"])
+    public const byte CmdControlNew = 0x0D;
+    public const byte CmdStatusNew = 0x10;
 
     public const int HeaderLength = 16;
     public const int RetcodeLength = 4;
@@ -120,6 +123,17 @@ public static class TuyaProtocol
         return dec.TransformFinalBlock(data, 0, data.Length);
     }
 
+    /// <summary>AES-ECB без выравнивания (нужно для вывода сессионного ключа 3.4).</summary>
+    public static byte[] AesEcbEncryptNoPadding(byte[] key, byte[] data)
+    {
+        using var aes = Aes.Create();
+        aes.Key = key;
+        aes.Mode = CipherMode.ECB;
+        aes.Padding = PaddingMode.None;
+        using var enc = aes.CreateEncryptor();
+        return enc.TransformFinalBlock(data, 0, data.Length - data.Length % 16);
+    }
+
     public static byte[] HmacSha256(byte[] key, byte[] data)
     {
         using var hmac = new HMACSHA256(key);
@@ -134,7 +148,14 @@ public static class TuyaProtocol
         return nonce;
     }
 
-    /// <summary>Сессионный ключ = local_nonce XOR remote_nonce (как в tinytuya).</summary>
+    /// <summary>
+    /// Сессионный ключ 3.4 (как в tinytuya, _negotiate_session_key_generate_finalize):
+    /// AES-128-ECB-БЕЗ-паддинга(local_key, nonce1 XOR nonce2). Не голый XOR!
+    /// </summary>
+    public static byte[] DeriveSessionKey34(byte[] localKey, byte[] nonce1, byte[] nonce2) =>
+        AesEcbEncryptNoPadding(localKey, DeriveSessionKeyXor(nonce1, nonce2));
+
+    /// <summary>Сессионный ключ = local_nonce XOR remote_nonce.</summary>
     public static byte[] DeriveSessionKeyXor(byte[] nonce1, byte[] nonce2)
     {
         var result = new byte[Math.Min(nonce1.Length, nonce2.Length)];
@@ -182,17 +203,40 @@ public static class TuyaProtocol
         return ms.ToArray();
     }
 
-    /// <summary>Кадр 3.4: AES-ECB(version_header(15) + JSON) + HMAC-SHA256 сессионным ключом.</summary>
-    public static byte[] BuildFrame34(string devId, byte[] sessionKey, byte cmd,
-        Dictionary<string, object>? dps, ref uint seqno, string version = "3.4")
+    /// <summary>
+    /// Команды, для которых заголовок версии НЕ добавляется
+    /// (tinytuya: H.NO_PROTOCOL_HEADER_CMDS).
+    /// </summary>
+    public static bool NeedsVersionHeader(byte cmd) =>
+        cmd is not (CmdSessKeyNegStart or CmdSessKeyNegResp or CmdSessKeyNegFinish
+                    or 0x09 or CmdDpQuery or CmdStatusNew or 0x12);
+
+    /// <summary>JSON для 3.4: {"protocol":5,"t":&lt;unixtime&gt;,"data":{"dps":{...}}}</summary>
+    public static string BuildJson34Control(Dictionary<string, object> dps) =>
+        "{\"protocol\":5,\"t\":" + DateTimeOffset.UtcNow.ToUnixTimeSeconds() +
+        ",\"data\":{\"dps\":" + JsonSerializer.Serialize(dps) + "}}";
+
+    /// <summary>Запрос статуса в 3.4 — пустой JSON.</summary>
+    public const string EmptyJson34 = "{}";
+
+    /// <summary>
+    /// Кадр 3.4: AES-ECB(сессионный ключ) от (заголовок версии + JSON) + HMAC-SHA256
+    /// сессионным ключом. Для запроса статуса (0x10) заголовок версии не добавляется.
+    /// </summary>
+    public static byte[] BuildFrame34(byte[] sessionKey, byte cmd, string json,
+        ref uint seqno, string version = "3.4")
     {
         seqno = (seqno + 1) & 0xFFFFFFFF;
 
-        byte[] jsonBytes = Encoding.UTF8.GetBytes(BuildJson(devId, dps, dps != null));
-        byte[] vh = VersionHeader(version);
-        var plain = new byte[vh.Length + jsonBytes.Length];
-        Buffer.BlockCopy(vh, 0, plain, 0, vh.Length);
-        Buffer.BlockCopy(jsonBytes, 0, plain, vh.Length, jsonBytes.Length);
+        byte[] jsonBytes = Encoding.UTF8.GetBytes(json);
+        byte[] plain = jsonBytes;
+        if (NeedsVersionHeader(cmd))
+        {
+            byte[] vh = VersionHeader(version);
+            plain = new byte[vh.Length + jsonBytes.Length];
+            Buffer.BlockCopy(vh, 0, plain, 0, vh.Length);
+            Buffer.BlockCopy(jsonBytes, 0, plain, vh.Length, jsonBytes.Length);
+        }
 
         byte[] encrypted = AesEcbEncrypt(sessionKey, plain);
         return Pack55AA(seqno, cmd, encrypted, sessionKey);
