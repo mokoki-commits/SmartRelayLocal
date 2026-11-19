@@ -5,9 +5,12 @@
 Поддерживаются протоколы **3.1** и **3.4** (поле `ver` в конфиге). Все кадры собираются
 по эталонной схеме `tinytuya` (big-endian заголовок `>4I`, AES-128-ECB, HMAC-SHA256 / CRC32).
 
-**Версия:** 5.0.0 (19.11.2026) · **Лицензия:** MIT (`LICENSE`) · **Архитектор / Исполнитель:**
-указываются в `smartrelay.json` (`architect` / `executor`) и видны в окне «О программе»,
-а также по команде `SmartRelay.exe --version`.
+**Версия:** 5.0.0 (19.11.2026) · **Лицензия:** MIT (`LICENSE`)
+**Архитектор:** avk013 · **Исполнитель:** Cline (AI coding agent) mokoki
+
+Эти сведения зашиты в программу (`AppInfo.cs`), видны в окне «О программе», в заголовке
+журнала и по команде `SmartRelay.exe --version`; при необходимости переопределяются
+в `smartrelay.json` (`architect` / `executor`).
 
 ## Что нужно
 
@@ -76,8 +79,8 @@ SmartRelay.exe --id <DEVICE_ID> --key <LOCAL_KEY> --ip <IP> diag
   "ver": "3.4",
   "poll": 3000,
   "showDiag": true,
-  "architect": "Имя Фамилия (архитектор)",
-  "executor": "Cline (AI coding agent)",
+  "architect": "avk013",
+  "executor": "Cline (AI coding agent) mokoki",
   "btnOnText": "ВКЛ",
   "btnOffText": "ВЫКЛ"
 }
@@ -94,8 +97,8 @@ SmartRelay.exe --id <DEVICE_ID> --key <LOCAL_KEY> --ip <IP> diag
 | `ver` | Версия протокола: `"3.4"` (по умолчанию) или `"3.1"`; при ошибке версия подбирается автоматически |
 | `poll` | Период автоопроса состояния в мс (по умолчанию 3000; `0` — опрос отключён) |
 | `showDiag` | Показывать кнопку «Диагностика (журнал)»: `true` (по умолчанию) / `false` |
-| `architect` | Архитектор решения — выводится в окне «О программе» и в `--version` |
-| `executor` | Исполнитель работ — там же; по умолчанию `Cline (AI coding agent)` |
+| `architect` | Архитектор решения (по умолчанию зашит `avk013`); выводится в окне «О программе» и в `--version` |
+| `executor` | Исполнитель работ (по умолчанию зашит `Cline (AI coding agent) mokoki`) — там же |
 | `btnOnText` | Надпись на кнопке ВКЛ |
 | `btnOffText` | Надпись на кнопке ВЫКЛ |
 
@@ -228,15 +231,16 @@ Local Key в журнал **не пишется** — ни в конфиге, н
 
 | Роль | Кто |
 |------|-----|
-| Архитектор решения | задаётся в `smartrelay.json` → `"architect"` |
-| Исполнитель работ | задаётся в `smartrelay.json` → `"executor"` (по умолчанию `Cline (AI coding agent)`) |
+| Архитектор решения | **avk013** (зашито в `AppInfo.cs`; можно переопределить через `"architect"` в конфиге) |
+| Исполнитель работ | **Cline (AI coding agent) mokoki** (зашито в `AppInfo.cs`; можно переопределить через `"executor"`) |
 | Сторонние компоненты | .NET 7 / Windows Forms, System.Text.Json (лицензия MIT); протокол Tuya реализован самостоятельно |
 
-Свои имена удобно указать в `smartrelay.json` — пересобирать программу не нужно:
+Имена зашиты в коде и работают сразу, без конфига. Если нужно их изменить
+(например, указать полное имя), достаточно добавить в `smartrelay.json` — пересобирать не нужно:
 
 ```json
-"architect": "Иван Петров — постановка задачи и архитектура",
-"executor": "Cline (AI coding agent) — реализация кода"
+"architect": "avk013 — постановка задачи и архитектура",
+"executor": "Cline (AI coding agent) mokoki — реализация кода"
 ```
 
 Проверить, что видит программа: `SmartRelay.exe --version`.

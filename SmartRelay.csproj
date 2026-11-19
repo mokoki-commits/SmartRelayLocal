@@ -13,8 +13,8 @@
     <AssemblyVersion>5.0.0.0</AssemblyVersion>
     <FileVersion>5.0.0.0</FileVersion>
     <Product>SmartRelay</Product>
-    <Company>SmartRelay contributors</Company>
-    <Copyright>© 2026 SmartRelay contributors · лицензия MIT</Copyright>
+    <Company>avk013</Company>
+    <Copyright>© 2026 avk013 · лицензия MIT</Copyright>
     <Description>Локальное управление розеткой SmartLife / Tuya по LAN (протокол 3.4 / 3.1)</Description>
   </PropertyGroup>
 

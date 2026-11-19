@@ -8,7 +8,8 @@ namespace SmartRelay;
 /// Сведения о программе: версия, дата выпуска, лицензия и авторы.
 /// Версия берётся из SmartRelay.csproj (&lt;Version&gt;) — один источник правды,
 /// она же попадает в свойства файла SmartRelay.exe в Проводнике.
-/// Архитектор и исполнитель задаются в smartrelay.json ("architect" / "executor").
+/// Архитектор (avk013) и исполнитель (Cline (AI coding agent) mokoki) зашиты здесь;
+/// при необходимости переопределяются в smartrelay.json ("architect" / "executor").
 /// </summary>
 public static class AppInfo
 {
@@ -21,10 +22,10 @@ public static class AppInfo
     public static string Version { get; } = ReadVersion();
 
     /// <summary>Архитектор решения (кто проектировал протокол/архитектуру).</summary>
-    public static string Architect { get; private set; } = "не указан";
+    public static string Architect { get; private set; } = "avk013";
 
     /// <summary>Исполнитель работ (кто реализовал код).</summary>
-    public static string Executor { get; private set; } = "Cline (AI coding agent)";
+    public static string Executor { get; private set; } = "Cline (AI coding agent) mokoki";
 
     public static string Title => $"{Product} {Version}";
 

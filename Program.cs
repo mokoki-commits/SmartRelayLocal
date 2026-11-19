@@ -244,8 +244,8 @@ class Program
         Console.WriteLine("    \"ver\": \"3.4\",");
         Console.WriteLine("    \"poll\": 3000,");
         Console.WriteLine("    \"showDiag\": true,");
-        Console.WriteLine("    \"architect\": \"Имя архитектора\",");
-        Console.WriteLine("    \"executor\": \"Имя исполнителя\",");
+        Console.WriteLine("    \"architect\": \"avk013\",");
+        Console.WriteLine("    \"executor\": \"Cline (AI coding agent) mokoki\",");
         Console.WriteLine("    \"btnOnText\": \"ВКЛ\",");
         Console.WriteLine("    \"btnOffText\": \"ВЫКЛ\"");
         Console.WriteLine("  }");

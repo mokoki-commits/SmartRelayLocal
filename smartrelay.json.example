@@ -8,8 +8,8 @@
   "ver": "3.4",
   "poll": 3000,
   "showDiag": true,
-  "architect": "Имя Фамилия (архитектор)",
-  "executor": "Cline (AI coding agent)",
+  "architect": "avk013",
+  "executor": "Cline (AI coding agent) mokoki",
   "btnOnText": "ВКЛ",
   "btnOffText": "ВЫКЛ"
 }
