@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
@@ -9,9 +9,9 @@
     <Nullable>enable</Nullable>
 
     <!-- Версия и сведения о программе: попадают в окно «О программе» и в свойства exe -->
-    <Version>5.0.4</Version>
-    <AssemblyVersion>5.0.4</AssemblyVersion>
-    <FileVersion>5.0.4</FileVersion>
+    <Version>5.0.5</Version>
+    <AssemblyVersion>5.0.5</AssemblyVersion>
+    <FileVersion>5.0.5</FileVersion>
     <Product>SmartRelay</Product>
     <Company>avk013</Company>
     <Copyright>© 2026 avk013 · лицензия MIT</Copyright>
