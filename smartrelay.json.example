@@ -5,6 +5,7 @@
   "port": 6668,
   "index": 1,
   "timeout": 5,
+  "ver": "3.4",
   "btnOnText": "ВКЛ",
   "btnOffText": "ВЫКЛ"
 }

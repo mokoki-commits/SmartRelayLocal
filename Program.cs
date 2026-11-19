@@ -45,6 +45,7 @@ class Program
         string? cfgDevId = null, cfgKey = null, cfgIp = null;
         int cfgPort = port, cfgIndex = index, cfgTimeout = timeoutSec;
         string cfgBtnOn = "ВКЛ", cfgBtnOff = "ВЫКЛ";
+        string cfgVer = "3.1";
 
         if (File.Exists(configPath))
         {
@@ -61,6 +62,7 @@ class Program
                     if (json.TryGetValue("timeout", out var t)) cfgTimeout = t.GetInt32();
                     cfgBtnOn = GetStr(json, "btnOnText") ?? "ВКЛ";
                     cfgBtnOff = GetStr(json, "btnOffText") ?? "ВЫКЛ";
+                    cfgVer = GetStr(json, "ver") ?? "3.1";
                 }
             }
             catch { }
@@ -92,7 +94,7 @@ class Program
 
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new MainForm(devId, localKey, ip, port, index, timeoutSec, cfgBtnOn, cfgBtnOff));
+            Application.Run(new MainForm(devId, localKey, ip, port, index, timeoutSec, cfgBtnOn, cfgBtnOff, cfgVer));
             return 0;
         }
 
@@ -108,7 +110,7 @@ class Program
 
         try
         {
-            var plug = new SmartPlug(devId, localKey, ip, port, index, timeoutSec);
+            var plug = new SmartPlug(devId, localKey, ip, port, index, timeoutSec, cfgVer);
             bool? result;
 
             switch (action)

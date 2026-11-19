@@ -22,12 +22,12 @@ public partial class MainForm : Form
     private readonly Button _btnOff;
 
     public MainForm(string devId, string localKey, string ip, int port, int index, int timeoutSec,
-        string btnOnText, string btnOffText)
+        string btnOnText, string btnOffText, string version = "3.1")
     {
         _btnOnText = btnOnText;
         _btnOffText = btnOffText;
 
-        _plug = new SmartPlug(devId, localKey, ip, port, index, timeoutSec);
+        _plug = new SmartPlug(devId, localKey, ip, port, index, timeoutSec, version);
 
         // Кнопка ВКЛ
         _btnOn = new Button

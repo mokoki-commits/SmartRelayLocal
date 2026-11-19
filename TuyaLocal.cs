@@ -16,6 +16,9 @@ public static class TuyaProtocol
 
     public const byte CmdControl = 0x07;
     public const byte CmdStatus = 0x08;
+    public const byte CmdDpQuery = 0x0A;
+    public const byte CmdSessKeyNegStart = 0x03;
+    public const byte CmdSessKeyNegFinish = 0x05;
 
     private static readonly uint[] Crc32Table = BuildCrc32Table();
 
@@ -62,7 +65,47 @@ public static class TuyaProtocol
         return bytes;
     }
 
-    public static byte[] BuildFrame(string devId, byte[] localKey, byte cmd, Dictionary<string, object> dps, ref uint seqno)
+    public static byte[] VersionHeader(string version)
+    {
+        var h = new byte[15];
+        var verBytes = Encoding.ASCII.GetBytes(version);
+        Array.Copy(verBytes, 0, h, 0, Math.Min(verBytes.Length, 3));
+        return h;
+    }
+
+    public static byte[] AesEcbEncrypt(byte[] key, byte[] data)
+    {
+        using var aes = Aes.Create();
+        aes.Key = key;
+        aes.Mode = CipherMode.ECB;
+        aes.Padding = PaddingMode.PKCS7;
+        using var enc = aes.CreateEncryptor();
+        return enc.TransformFinalBlock(data, 0, data.Length);
+    }
+
+    public static byte[] AesEcbDecrypt(byte[] key, byte[] data)
+    {
+        using var aes = Aes.Create();
+        aes.Key = key;
+        aes.Mode = CipherMode.ECB;
+        aes.Padding = PaddingMode.PKCS7;
+        using var dec = aes.CreateDecryptor();
+        return dec.TransformFinalBlock(data, 0, data.Length);
+    }
+
+    public static byte[] HmacSha256(byte[] key, byte[] data)
+    {
+        using var hmac = new HMACSHA256(key);
+        return hmac.ComputeHash(data);
+    }
+
+    private static byte[] Md5(byte[] data)
+    {
+        using var md5 = MD5.Create();
+        return md5.ComputeHash(data);
+    }
+
+    public static byte[] BuildFrame31(string devId, byte[] localKey, byte cmd, Dictionary<string, object> dps, ref uint seqno)
     {
         seqno = (seqno + 1) & 0xFFFFFFFF;
 
@@ -106,27 +149,51 @@ public static class TuyaProtocol
         return ms.ToArray();
     }
 
-    private static byte[] AesEcbEncrypt(byte[] key, byte[] data)
+    public static byte[] BuildFrame34(string devId, byte[] sessionKey, byte cmd, Dictionary<string, object> dps, ref uint seqno, bool includeVersionHeader = true)
     {
-        using var aes = Aes.Create();
-        aes.Key = key;
-        aes.Mode = CipherMode.ECB;
-        aes.Padding = PaddingMode.PKCS7;
-        using var enc = aes.CreateEncryptor();
-        return enc.TransformFinalBlock(data, 0, data.Length);
+        seqno = (seqno + 1) & 0xFFFFFFFF;
+
+        var json = new Dictionary<string, object>
+        {
+            ["gwId"] = devId,
+            ["devId"] = devId,
+            ["uid"] = "",
+            ["t"] = ((int)(DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalSeconds).ToString(),
+        };
+        if (dps != null)
+            json["dps"] = dps;
+
+        string jsonStr = JsonSerializer.Serialize(json);
+        byte[] payload = Encoding.UTF8.GetBytes(jsonStr);
+
+        if (includeVersionHeader)
+        {
+            byte[] vh = VersionHeader("3.4");
+            var combined = new byte[vh.Length + payload.Length];
+            Array.Copy(vh, combined, vh.Length);
+            Array.Copy(payload, 0, combined, vh.Length, payload.Length);
+            payload = combined;
+        }
+
+        byte[] encrypted = AesEcbEncrypt(sessionKey, payload);
+
+        using var ms = new MemoryStream();
+        using var bw = new BinaryWriter(ms, Encoding.ASCII, leaveOpen: true);
+        bw.Write(Prefix);
+        bw.Write(seqno);
+        bw.Write(cmd);
+        bw.Write(encrypted.Length + 32 + 4);
+        bw.Write(encrypted);
+
+        byte[] headerAndBody = ms.ToArray();
+        byte[] hmac = HmacSha256(sessionKey, headerAndBody);
+        bw.Write(hmac);
+        bw.Write(Suffix);
+
+        return ms.ToArray();
     }
 
-    private static byte[] AesEcbDecrypt(byte[] key, byte[] data)
-    {
-        using var aes = Aes.Create();
-        aes.Key = key;
-        aes.Mode = CipherMode.ECB;
-        aes.Padding = PaddingMode.PKCS7;
-        using var dec = aes.CreateDecryptor();
-        return dec.TransformFinalBlock(data, 0, data.Length);
-    }
-
-    public static bool TryParseFrame(byte[] raw, out Frame frame)
+    public static bool TryParseFrame31(byte[] raw, out Frame frame)
     {
         frame = null;
         if (raw == null || raw.Length < 24)
@@ -164,20 +231,62 @@ public static class TuyaProtocol
         return true;
     }
 
-    public static Dictionary<string, JsonElement>? DecodeResponse(byte[] localKey, byte[] payload)
+    public static bool TryParseFrame34(byte[] raw, byte[] sessionKey, out Frame frame)
+    {
+        frame = null;
+        if (raw == null || raw.Length < 16 + 32 + 4)
+            return false;
+
+        uint prefix = BitConverter.ToUInt32(raw, 0);
+        if (prefix != Prefix)
+            return false;
+
+        uint seqno = BitConverter.ToUInt32(raw, 4);
+        uint cmd = BitConverter.ToUInt32(raw, 8);
+        uint length = BitConverter.ToUInt32(raw, 12);
+        int frameLength = (int)length;
+
+        if (raw.Length < 16 + frameLength)
+            return false;
+
+        int hmacOffset = frameLength - 32 - 4;
+        int encryptedLen = hmacOffset;
+
+        byte[] encrypted = new byte[encryptedLen];
+        Array.Copy(raw, 16, encrypted, 0, encryptedLen);
+
+        byte[] hmacReceived = new byte[32];
+        Array.Copy(raw, 16 + encryptedLen, hmacReceived, 0, 32);
+
+        uint suffix = BitConverter.ToUInt32(raw, 16 + frameLength - 4);
+        if (suffix != Suffix)
+            return false;
+
+        byte[] headerAndBody = new byte[16 + encryptedLen];
+        Array.Copy(raw, 0, headerAndBody, 0, 16 + encryptedLen);
+        byte[] hmacCalc = HmacSha256(sessionKey, headerAndBody);
+
+        if (!hmacReceived.SequenceEqual(hmacCalc))
+            return false;
+
+        byte[] decrypted = AesEcbDecrypt(sessionKey, encrypted);
+
+        if (decrypted.Length > 15 && Encoding.ASCII.GetString(decrypted, 0, 3) == "3.4")
+        {
+            var jsonBytes = new byte[decrypted.Length - 15];
+            Array.Copy(decrypted, 15, jsonBytes, 0, jsonBytes.Length);
+            decrypted = jsonBytes;
+        }
+
+        frame = new Frame(seqno, (byte)cmd, decrypted);
+        return true;
+    }
+
+    public static Dictionary<string, JsonElement>? DecodeJson(byte[] payload)
     {
         try
         {
             string text = Encoding.UTF8.GetString(payload);
-            if (text.StartsWith("3.1") && text.Length > 19)
-            {
-                // после "3.1" идут 16 символов среза MD5, затем base64
-                string b64 = text.Substring(19);
-                byte[] encrypted = Convert.FromBase64String(b64);
-                byte[] decrypted = AesEcbDecrypt(localKey, encrypted);
-                text = Encoding.UTF8.GetString(decrypted);
-            }
-
             using var doc = JsonDocument.Parse(text);
             var result = new Dictionary<string, JsonElement>();
             foreach (var prop in doc.RootElement.EnumerateObject())
@@ -188,6 +297,25 @@ public static class TuyaProtocol
         {
             return null;
         }
+    }
+
+    public static byte[] GenerateNonce(int length = 16)
+    {
+        using var rng = RandomNumberGenerator.Create();
+        var nonce = new byte[length];
+        rng.GetBytes(nonce);
+        return nonce;
+    }
+
+    public static byte[] DeriveSessionKey(byte[] nonce1, byte[] nonce2)
+    {
+        var combined = new byte[nonce1.Length + nonce2.Length];
+        Array.Copy(nonce1, combined, nonce1.Length);
+        Array.Copy(nonce2, 0, combined, nonce1.Length, nonce2.Length);
+        byte[] md5 = Md5(combined);
+        var sessionKey = new byte[16];
+        Array.Copy(md5, sessionKey, 16);
+        return sessionKey;
     }
 
     public sealed class Frame

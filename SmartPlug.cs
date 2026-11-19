@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Net.Sockets;
+using System.Text;
 using System.Text.Json;
 
 namespace SmartRelay;
@@ -15,11 +16,14 @@ public class SmartPlug
     public int Port { get; }
     public int Index { get; }
     public TimeSpan Timeout { get; }
+    public string Version { get; }  // "3.1" или "3.4"
 
     private uint _seqno;
+    private byte[]? _sessionKey;
+    private bool _sessionNegotiated;
 
     public SmartPlug(string devId, string localKey, string ip,
-        int port = TuyaProtocol.DefaultPort, int index = 1, int timeoutSec = 5)
+        int port = TuyaProtocol.DefaultPort, int index = 1, int timeoutSec = 5, string version = "3.1")
     {
         DevId = devId ?? throw new ArgumentNullException(nameof(devId));
         LocalKey = TuyaProtocol.NormalizeKey(localKey);
@@ -27,6 +31,7 @@ public class SmartPlug
         Port = port;
         Index = index;
         Timeout = TimeSpan.FromSeconds(timeoutSec);
+        Version = version ?? "3.1";
     }
 
     private byte[] SendRecv(byte[] frame, bool waitResponse)
@@ -57,8 +62,18 @@ public class SmartPlug
                 if (ms.Length >= 16)
                 {
                     uint length = BitConverter.ToUInt32(ms.GetBuffer(), 12);
-                    if (ms.Length >= 16 + length)
-                        break;
+                    int frameLength = (int)length;
+
+                    if (Version == "3.4")
+                    {
+                        if (ms.Length >= 16 + frameLength)
+                            break;
+                    }
+                    else
+                    {
+                        if (ms.Length >= 16 + frameLength)
+                            break;
+                    }
                 }
             }
             catch (SocketException)
@@ -69,43 +84,180 @@ public class SmartPlug
         return ms.Length > 0 ? ms.ToArray() : null;
     }
 
+    /// <summary>Выполнить согласование сессионного ключа для протокола 3.4.</summary>
+    private bool NegotiateSessionKey()
+    {
+        if (_sessionNegotiated && _sessionKey != null)
+            return true;
+
+        byte[] nonce1 = TuyaProtocol.GenerateNonce(16);
+
+        var negJson = new Dictionary<string, object>
+        {
+            ["gwId"] = DevId,
+            ["devId"] = DevId,
+            ["uid"] = "",
+            ["t"] = ((int)(DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalSeconds).ToString(),
+            ["nonce1"] = Convert.ToBase64String(nonce1)
+        };
+
+        string negJsonStr = JsonSerializer.Serialize(negJson);
+        byte[] negPayload = Encoding.UTF8.GetBytes(negJsonStr);
+
+        byte[] encrypted = TuyaProtocol.AesEcbEncrypt(LocalKey, negPayload);
+
+        using var ms = new MemoryStream();
+        using var bw = new BinaryWriter(ms, Encoding.ASCII, leaveOpen: true);
+        bw.Write(TuyaProtocol.Prefix);
+        bw.Write((_seqno + 1) & 0xFFFFFFFF);
+        bw.Write(TuyaProtocol.CmdSessKeyNegStart);
+        bw.Write(encrypted.Length + 32 + 4);
+        bw.Write(encrypted);
+
+        byte[] headerAndBody = ms.ToArray();
+        byte[] hmac = TuyaProtocol.HmacSha256(LocalKey, headerAndBody);
+        bw.Write(hmac);
+        bw.Write(TuyaProtocol.Suffix);
+
+        byte[] frame = ms.ToArray();
+        _seqno = (uint)((_seqno + 1) & 0xFFFFFFFF);
+
+        byte[] raw = SendRecv(frame, waitResponse: true);
+        if (raw == null)
+            return false;
+
+        if (!TuyaProtocol.TryParseFrame34(raw, LocalKey, out var respFrame))
+            return false;
+
+        byte[] decrypted = TuyaProtocol.AesEcbDecrypt(LocalKey, respFrame.Payload);
+        string text = Encoding.UTF8.GetString(decrypted);
+
+        string? nonce2B64 = null;
+        try
+        {
+            using var doc = JsonDocument.Parse(text);
+            if (doc.RootElement.TryGetProperty("nonce2", out var el))
+                nonce2B64 = el.GetString();
+        }
+        catch { return false; }
+
+        if (string.IsNullOrEmpty(nonce2B64))
+            return false;
+
+        byte[] nonce2 = Convert.FromBase64String(nonce2B64);
+
+        _sessionKey = TuyaProtocol.DeriveSessionKey(nonce1, nonce2);
+
+        byte[] finishFrame = TuyaProtocol.BuildFrame34(DevId, _sessionKey, TuyaProtocol.CmdSessKeyNegFinish, null, ref _seqno, includeVersionHeader: false);
+        byte[] finishRaw = SendRecv(finishFrame, waitResponse: true);
+
+        _sessionNegotiated = finishRaw != null;
+        return _sessionNegotiated;
+    }
+
     public bool? Set(bool value)
     {
-        var dps = new Dictionary<string, object> { [Index.ToString()] = value };
-        byte[] frame = TuyaProtocol.BuildFrame(DevId, LocalKey, TuyaProtocol.CmdControl, dps, ref _seqno);
-        byte[] raw = SendRecv(frame, waitResponse: true);
-
-        if (raw != null && TuyaProtocol.TryParseFrame(raw, out var fr))
+        if (Version == "3.4")
         {
-            var decoded = TuyaProtocol.DecodeResponse(LocalKey, fr.Payload);
-            if (decoded != null &&
-                decoded.TryGetValue("dps", out var dpsEl) &&
-                dpsEl.ValueKind == JsonValueKind.Object &&
-                dpsEl.TryGetProperty(Index.ToString(), out var val))
+            if (!_sessionNegotiated && !NegotiateSessionKey())
+                return null;
+
+            var dps = new Dictionary<string, object> { [Index.ToString()] = value };
+            byte[] frame = TuyaProtocol.BuildFrame34(DevId, _sessionKey!, TuyaProtocol.CmdControl, dps, ref _seqno);
+            byte[] raw = SendRecv(frame, waitResponse: true);
+
+            if (raw != null && TuyaProtocol.TryParseFrame34(raw, _sessionKey!, out var fr))
             {
-                return val.ValueKind == JsonValueKind.True || val.GetBoolean();
+                var decoded = TuyaProtocol.DecodeJson(fr.Payload);
+                if (decoded != null && decoded.TryGetValue("dps", out var dpsEl) && dpsEl.ValueKind == JsonValueKind.Object)
+                {
+                    if (dpsEl.TryGetProperty(Index.ToString(), out var val))
+                        return val.ValueKind == JsonValueKind.True || val.GetBoolean();
+                }
             }
+            return null;
         }
-        return null;
+        else
+        {
+            var dps = new Dictionary<string, object> { [Index.ToString()] = value };
+            byte[] frame = TuyaProtocol.BuildFrame31(DevId, LocalKey, TuyaProtocol.CmdControl, dps, ref _seqno);
+            byte[] raw = SendRecv(frame, waitResponse: true);
+
+            if (raw != null && TuyaProtocol.TryParseFrame31(raw, out var fr))
+            {
+                var decoded = DecodeResponse31(LocalKey, fr.Payload);
+                if (decoded != null && decoded.TryGetValue("dps", out var dpsEl) && dpsEl.ValueKind == JsonValueKind.Object)
+                {
+                    if (dpsEl.TryGetProperty(Index.ToString(), out var val))
+                        return val.ValueKind == JsonValueKind.True || val.GetBoolean();
+                }
+            }
+            return null;
+        }
     }
 
     public bool? Query()
     {
-        byte[] frame = TuyaProtocol.BuildFrame(DevId, LocalKey, TuyaProtocol.CmdStatus, null, ref _seqno);
-        byte[] raw = SendRecv(frame, waitResponse: true);
-
-        if (raw != null && TuyaProtocol.TryParseFrame(raw, out var fr))
+        if (Version == "3.4")
         {
-            var decoded = TuyaProtocol.DecodeResponse(LocalKey, fr.Payload);
-            if (decoded != null &&
-                decoded.TryGetValue("dps", out var dpsEl) &&
-                dpsEl.ValueKind == JsonValueKind.Object &&
-                dpsEl.TryGetProperty(Index.ToString(), out var val))
+            if (!_sessionNegotiated && !NegotiateSessionKey())
+                return null;
+
+            byte[] frame = TuyaProtocol.BuildFrame34(DevId, _sessionKey!, TuyaProtocol.CmdDpQuery, null, ref _seqno);
+            byte[] raw = SendRecv(frame, waitResponse: true);
+
+            if (raw != null && TuyaProtocol.TryParseFrame34(raw, _sessionKey!, out var fr))
             {
-                return val.ValueKind == JsonValueKind.True || val.GetBoolean();
+                var decoded = TuyaProtocol.DecodeJson(fr.Payload);
+                if (decoded != null && decoded.TryGetValue("dps", out var dpsEl) && dpsEl.ValueKind == JsonValueKind.Object)
+                {
+                    if (dpsEl.TryGetProperty(Index.ToString(), out var val))
+                        return val.ValueKind == JsonValueKind.True || val.GetBoolean();
+                }
             }
+            return null;
         }
-        return null;
+        else
+        {
+            byte[] frame = TuyaProtocol.BuildFrame31(DevId, LocalKey, TuyaProtocol.CmdStatus, null, ref _seqno);
+            byte[] raw = SendRecv(frame, waitResponse: true);
+
+            if (raw != null && TuyaProtocol.TryParseFrame31(raw, out var fr))
+            {
+                var decoded = DecodeResponse31(LocalKey, fr.Payload);
+                if (decoded != null && decoded.TryGetValue("dps", out var dpsEl) && dpsEl.ValueKind == JsonValueKind.Object)
+                {
+                    if (dpsEl.TryGetProperty(Index.ToString(), out var val))
+                        return val.ValueKind == JsonValueKind.True || val.GetBoolean();
+                }
+            }
+            return null;
+        }
+    }
+
+    private static Dictionary<string, JsonElement>? DecodeResponse31(byte[] localKey, byte[] payload)
+    {
+        try
+        {
+            string text = Encoding.UTF8.GetString(payload);
+            if (text.StartsWith("3.1") && text.Length > 19)
+            {
+                string b64 = text.Substring(19);
+                byte[] encrypted = Convert.FromBase64String(b64);
+                byte[] decrypted = TuyaProtocol.AesEcbDecrypt(localKey, encrypted);
+                text = Encoding.UTF8.GetString(decrypted);
+            }
+
+            using var doc = JsonDocument.Parse(text);
+            var result = new Dictionary<string, JsonElement>();
+            foreach (var prop in doc.RootElement.EnumerateObject())
+                result[prop.Name] = prop.Value.Clone();
+            return result;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     public bool? TurnOn() => Set(true);
