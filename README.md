@@ -40,7 +40,8 @@ SmartRelay.exe --id <DEVICE_ID> --key <LOCAL_KEY> --ip <IP> diag
 
 ## Конфигурационный файл
 
-Создайте `smartrelay.json` рядом с `SmartRelay.exe` (скопируйте из `smartrelay.json.example`):
+Создайте `smartrelay.json` рядом с `SmartRelay.exe` — скопируйте шаблон `smartrelay.json.example`
+(он лежит в корне репозитория и автоматически попадает в папку публикации вместе с `SmartRelay.exe`):
 
 ```json
 {
