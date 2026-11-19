@@ -1,0 +1,18 @@
+# .NET build output
+bin/
+obj/
+
+# Visual Studio
+*.user
+*.suo
+.vs/
+
+# Publish output
+publish/
+
+# NuGet
+*.nupkg
+nuget.config
+
+# Local config (user-specific keys — do not commit real keys)
+smartrelay.json
