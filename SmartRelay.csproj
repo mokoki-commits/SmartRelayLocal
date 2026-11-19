@@ -17,4 +17,48 @@
     </None>
   </ItemGroup>
 
+  <!--
+    Кросс-сборка на Linux собирает apphost с консольной подсистемой (PE subsystem = 3),
+    из-за чего перед окном формы на Windows мелькает консоль.
+    Правим 2 байта в заголовке PE (как это делает editbin /SUBSYSTEM:WINDOWS) — уже после сборки.
+  -->
+  <UsingTask TaskName="SetGuiSubsystem"
+             TaskFactory="RoslynCodeTaskFactory"
+             AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <TargetFile ParameterType="System.String" Required="true" />
+    </ParameterGroup>
+    <Task>
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        if (System.IO.File.Exists(TargetFile))
+        {
+            byte[] bytes = System.IO.File.ReadAllBytes(TargetFile);
+            int peOffset = System.BitConverter.ToInt32(bytes, 0x3C);
+            if (peOffset > 0 && peOffset + 0x5C < bytes.Length)
+            {
+                int subsystemField = peOffset + 24 + 68;
+                ushort subsystem = System.BitConverter.ToUInt16(bytes, subsystemField);
+                if (subsystem == 3) // IMAGE_SUBSYSTEM_WINDOWS_CUI
+                {
+                    bytes[subsystemField] = 2;      // IMAGE_SUBSYSTEM_WINDOWS_GUI
+                    bytes[subsystemField + 1] = 0;
+                    System.IO.File.WriteAllBytes(TargetFile, bytes);
+                    Log.LogMessage(MessageImportance.High, "SmartRelay: подсистема exe исправлена на GUI (без консольного окна)");
+                }
+            }
+        }
+      ]]></Code>
+    </Task>
+  </UsingTask>
+
+  <Target Name="FixGuiSubsystemBuild" AfterTargets="Build"
+          Condition="Exists('$(TargetDir)$(AssemblyName).exe')">
+    <SetGuiSubsystem TargetFile="$(TargetDir)$(AssemblyName).exe" />
+  </Target>
+
+  <Target Name="FixGuiSubsystemPublish" AfterTargets="Publish"
+          Condition="'$(PublishDir)' != '' And Exists('$(PublishDir)$(AssemblyName).exe')">
+    <SetGuiSubsystem TargetFile="$(PublishDir)$(AssemblyName).exe" />
+  </Target>
+
 </Project>

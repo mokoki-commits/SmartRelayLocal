@@ -6,6 +6,7 @@
   "index": 1,
   "timeout": 5,
   "ver": "3.4",
+  "poll": 3000,
   "btnOnText": "ВКЛ",
   "btnOffText": "ВЫКЛ"
 }

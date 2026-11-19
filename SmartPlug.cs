@@ -18,15 +18,21 @@ public sealed class PlugResult
 {
     public bool? Value { get; }
     public string Message { get; }
-    public bool Ok => Value.HasValue;
 
-    private PlugResult(bool? value, string message)
+    /// <summary>Команда принята устройством (retcode=0), но фактическое состояние не подтверждено.</summary>
+    public bool CommandAccepted { get; }
+
+    public bool Ok => Value.HasValue || CommandAccepted;
+
+    private PlugResult(bool? value, string message, bool commandAccepted = false)
     {
         Value = value;
         Message = message;
+        CommandAccepted = commandAccepted;
     }
 
     public static PlugResult Success(bool value, string message) => new(value, message);
+    public static PlugResult Accepted(string message) => new(null, message, commandAccepted: true);
     public static PlugResult Fail(string message) => new(null, message);
 }
 
@@ -69,6 +75,9 @@ public class SmartPlug : IDisposable
     /// <summary>Предупреждение о несовпадении версии; печатается после первой успешной операции.</summary>
     private string? _pendingVersionNote;
     private int _forcePort = -1;
+
+    /// <summary>Операции идут строго по очереди: одно TCP-соединение, один кадр за раз.</summary>
+    private readonly SemaphoreSlim _gate = new(1, 1);
 
     private double VersionNumber => TuyaProtocol.VersionToNumber(Version);
 
@@ -354,6 +363,19 @@ public class SmartPlug : IDisposable
     /// </summary>
     private PlugResult Execute(bool query, Dictionary<string, object>? dps)
     {
+        _gate.Wait();
+        try
+        {
+            return ExecuteLocked(query, dps);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    private PlugResult ExecuteLocked(bool query, Dictionary<string, object>? dps)
+    {
         var res = ExecuteCore(query, dps);
         if (res.Ok)
         {
@@ -433,6 +455,8 @@ public class SmartPlug : IDisposable
             Send(frame);
 
             string lastPayloadText = "";
+            bool acked = false;
+            bool ackOnly = false;
 
             for (int attempt = 0; attempt < 4; attempt++)
             {
@@ -473,6 +497,9 @@ public class SmartPlug : IDisposable
                     if (lastPayloadText.Length > 0)
                         Diag.Detail("   ответ устройства: " + Shorten(lastPayloadText));
 
+                    if (fr.Retcode == 0)
+                        acked = true;
+
                     if (fr.Retcode != 0)
                     {
                         LastError = $"устройство вернуло retcode={fr.Retcode}" +
@@ -483,7 +510,28 @@ public class SmartPlug : IDisposable
                     bool? value = TryExtractDp(payload);
                     if (value.HasValue)
                         return PlugResult.Success(value.Value, value.Value ? "Розетка ВКЛ." : "Розетка ВЫКЛ.");
+
+                    // Пустой ответ {} — это подтверждение команды, а не начало новой посылки:
+                    // ждать следующий кадр бессмысленно (иначе таймаут и ложный обрыв).
+                    if (fr.Retcode == 0 && lastPayloadText.Length <= 2)
+                        ackOnly = true;
                 }
+
+                if (ackOnly)
+                    break;
+            }
+
+            // Команда принята (retcode=0), но состояние DP в ответе не пришло — так ведут себя
+            // многие прошивки 3.4. Подтверждаем фактическое состояние запросом 0x10
+            // в том же соединении (пакетно, все DP сразу).
+            if (!query && acked)
+            {
+                Diag.Log("   команда принята (retcode=0), состояние не передано — подтверждаю запросом статуса");
+                var confirm = ExecuteCore(query: true, dps: null);
+                if (confirm.Ok && confirm.Value.HasValue)
+                    return confirm;
+                return PlugResult.Accepted("Команда отправлена, но состояние не подтвердилось" +
+                                           (confirm.Message.Length > 0 ? ": " + confirm.Message : "."));
             }
 
             LastError = $"Ответ получен, но DP \"{Index}\" в нём не найден (проверьте \"index\" в конфиге)." +

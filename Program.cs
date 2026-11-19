@@ -49,6 +49,7 @@ class Program
         string? cfgDevId = null, cfgKey = null, cfgIp = null;
         int cfgPort = port, cfgIndex = index, cfgTimeout = timeoutSec;
         string cfgBtnOn = "ВКЛ", cfgBtnOff = "ВЫКЛ", cfgVer = "3.4";
+        int cfgPoll = 3000;
 
         if (File.Exists(configPath))
         {
@@ -66,6 +67,7 @@ class Program
                     cfgBtnOn = GetStr(json, "btnOnText") ?? "ВКЛ";
                     cfgBtnOff = GetStr(json, "btnOffText") ?? "ВЫКЛ";
                     cfgVer = GetStr(json, "ver") ?? "3.4";
+                    if (json.TryGetValue("poll", out var pl)) cfgPoll = pl.GetInt32();
                 }
             }
             catch (Exception ex)
@@ -100,7 +102,7 @@ class Program
 
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new MainForm(devId, localKey, ip, port, index, timeoutSec, cfgBtnOn, cfgBtnOff, cfgVer));
+            Application.Run(new MainForm(devId, localKey, ip, port, index, timeoutSec, cfgBtnOn, cfgBtnOff, cfgVer, cfgPoll));
             return 0;
         }
 
@@ -208,6 +210,7 @@ class Program
         Console.WriteLine("    \"index\": 1,");
         Console.WriteLine("    \"timeout\": 5,");
         Console.WriteLine("    \"ver\": \"3.4\",");
+        Console.WriteLine("    \"poll\": 3000,");
         Console.WriteLine("    \"btnOnText\": \"ВКЛ\",");
         Console.WriteLine("    \"btnOffText\": \"ВЫКЛ\"");
         Console.WriteLine("  }");
