@@ -7,11 +7,25 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+
+    <!-- Версия и сведения о программе: попадают в окно «О программе» и в свойства exe -->
+    <Version>5.0.0</Version>
+    <AssemblyVersion>5.0.0.0</AssemblyVersion>
+    <FileVersion>5.0.0.0</FileVersion>
+    <Product>SmartRelay</Product>
+    <Company>SmartRelay contributors</Company>
+    <Copyright>© 2026 SmartRelay contributors · лицензия MIT</Copyright>
+    <Description>Локальное управление розеткой SmartLife / Tuya по LAN (протокол 3.4 / 3.1)</Description>
   </PropertyGroup>
 
   <ItemGroup>
     <!-- шаблон конфига кладём рядом с exe, чтобы его было легко скопировать в smartrelay.json -->
     <None Update="smartrelay.json.example">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
+    <!-- текст лицензии также кладём рядом с exe (кнопка «Открыть лицензию» в окне «О программе») -->
+    <None Update="LICENSE">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </None>

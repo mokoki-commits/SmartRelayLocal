@@ -31,9 +31,11 @@ public class MainForm : Form
     private int _busy;
 
     public MainForm(string devId, string localKey, string ip, int port, int index, int timeoutSec,
-        string btnOnText, string btnOffText, string version = "3.4", int pollMs = 3000)
+        string btnOnText, string btnOffText, string version = "3.4", int pollMs = 3000,
+        bool showDiag = true)
     {
         _plug = new SmartPlug(devId, localKey, ip, port, index, timeoutSec, version);
+        Diag.Log(AppInfo.Summary);
 
         _stateLabel = new Label
         {
@@ -93,18 +95,37 @@ public class MainForm : Form
             form.ShowDialog(this);
         };
 
-        Text = "SmartRelay — управление розеткой";
-        Size = new Size(361, 264);
+        Text = $"{AppInfo.Title} — управление розеткой";
+        Size = new Size(361, showDiag ? 272 : 226);
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         Padding = new Padding(10);
+
+        // кнопку диагностики можно скрыть в конфиге: "showDiag": false
+        _btnDiag.Visible = showDiag;
+
+        var aboutLink = new LinkLabel
+        {
+            Text = $"v{AppInfo.Version} · {AppInfo.License} · О программе…",
+            Location = new Point(20, showDiag ? 190 : 148),
+            Size = new Size(305, 18),
+            Font = new Font("Segoe UI", 8.5f),
+            LinkColor = Color.SteelBlue,
+            ActiveLinkColor = Color.MidnightBlue
+        };
+        aboutLink.LinkClicked += (_, _) =>
+        {
+            using var form = new AboutForm();
+            form.ShowDialog(this);
+        };
 
         Controls.Add(_stateLabel);
         Controls.Add(_btnOn);
         Controls.Add(_btnOff);
         Controls.Add(_statusLabel);
         Controls.Add(_btnDiag);
+        Controls.Add(aboutLink);
 
         _pollMs = pollMs;
         _poll = new System.Windows.Forms.Timer { Interval = pollMs < 1000 ? 3000 : pollMs };

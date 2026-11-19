@@ -7,6 +7,9 @@
   "timeout": 5,
   "ver": "3.4",
   "poll": 3000,
+  "showDiag": true,
+  "architect": "Имя Фамилия (архитектор)",
+  "executor": "Cline (AI coding agent)",
   "btnOnText": "ВКЛ",
   "btnOffText": "ВЫКЛ"
 }

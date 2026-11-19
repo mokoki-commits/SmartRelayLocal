@@ -38,6 +38,9 @@ class Program
                     action = args[i]; guiMode = false; break;
                 case "--gui": guiMode = true; break;
                 case "--cli": guiMode = false; break;
+                case "--version": case "-V":
+                    PrintVersion();
+                    return 0;
                 case "--help": case "-h":
                     PrintHelp();
                     return 0;
@@ -50,6 +53,8 @@ class Program
         int cfgPort = port, cfgIndex = index, cfgTimeout = timeoutSec;
         string cfgBtnOn = "ВКЛ", cfgBtnOff = "ВЫКЛ", cfgVer = "3.4";
         int cfgPoll = 3000;
+        bool cfgShowDiag = true;
+        string? cfgArchitect = null, cfgExecutor = null;
 
         if (File.Exists(configPath))
         {
@@ -68,6 +73,9 @@ class Program
                     cfgBtnOff = GetStr(json, "btnOffText") ?? "ВЫКЛ";
                     cfgVer = GetStr(json, "ver") ?? "3.4";
                     if (json.TryGetValue("poll", out var pl)) cfgPoll = pl.GetInt32();
+                    cfgShowDiag = GetBool(json, "showDiag") ?? true;
+                    cfgArchitect = GetStr(json, "architect");
+                    cfgExecutor = GetStr(json, "executor");
                 }
             }
             catch (Exception ex)
@@ -75,6 +83,8 @@ class Program
                 Console.Error.WriteLine("Не удалось прочитать " + configPath + ": " + ex.Message);
             }
         }
+
+        AppInfo.Configure(cfgArchitect, cfgExecutor);
 
         devId ??= cfgDevId;
         localKey ??= cfgKey;
@@ -102,7 +112,7 @@ class Program
 
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new MainForm(devId, localKey, ip, port, index, timeoutSec, cfgBtnOn, cfgBtnOff, cfgVer, cfgPoll));
+            Application.Run(new MainForm(devId, localKey, ip, port, index, timeoutSec, cfgBtnOn, cfgBtnOff, cfgVer, cfgPoll, cfgShowDiag));
             return 0;
         }
 
@@ -120,7 +130,9 @@ class Program
         {
             var plug = new SmartPlug(devId, localKey, ip, port, index, timeoutSec, cfgVer);
 
-            Console.WriteLine($"IP={ip}, порт={port}, версия={cfgVer}, index={index}");
+            Console.WriteLine(AppInfo.Summary);
+            Console.WriteLine(AppInfo.ShortLine);
+            Console.WriteLine($"IP={ip}, порт={port}, версия протокола={cfgVer}, index={index}");
             Console.WriteLine("Журнал: " + Diag.LogFile);
             Console.WriteLine();
 
@@ -171,9 +183,28 @@ class Program
             : null;
     }
 
+    static bool? GetBool(Dictionary<string, JsonElement> dict, string name)
+    {
+        if (!dict.TryGetValue(name, out var el))
+            return null;
+        if (el.ValueKind == JsonValueKind.True)
+            return true;
+        if (el.ValueKind == JsonValueKind.False)
+            return false;
+        return el.ValueKind == JsonValueKind.String && bool.TryParse(el.GetString(), out bool b) ? b : null;
+    }
+
+    static void PrintVersion()
+    {
+        Console.WriteLine(AppInfo.AboutText);
+        Console.WriteLine();
+        Console.WriteLine($"Журнал: {Diag.LogFile}");
+    }
+
     static void PrintHelp()
     {
-        Console.WriteLine("SmartRelay — локальное управление розеткой SmartLife / Tuya без интернета.");
+        Console.WriteLine($"{AppInfo.Title} — локальное управление розеткой SmartLife / Tuya без интернета.");
+        Console.WriteLine(AppInfo.ShortLine);
         Console.WriteLine();
         Console.WriteLine("ГУИ (по умолчанию, без аргументов):");
         Console.WriteLine("  SmartRelay.exe              окно с кнопками ВКЛ / ВЫКЛ и диагностикой");
@@ -191,6 +222,7 @@ class Program
         Console.WriteLine("  --timeout   Таймаут сети, сек (по умолчанию 5)");
         Console.WriteLine("  --config    Путь к JSON-конфигу (по умолчанию smartrelay.json)");
         Console.WriteLine("  --verbose   Подробный журнал с hex-дампами кадров");
+        Console.WriteLine("  --version   Версия программы, лицензия и авторы (архитектор/исполнитель)");
         Console.WriteLine("  --gui       Запустить графическое окно");
         Console.WriteLine("  --cli       Работать в консоли");
         Console.WriteLine();
@@ -211,6 +243,9 @@ class Program
         Console.WriteLine("    \"timeout\": 5,");
         Console.WriteLine("    \"ver\": \"3.4\",");
         Console.WriteLine("    \"poll\": 3000,");
+        Console.WriteLine("    \"showDiag\": true,");
+        Console.WriteLine("    \"architect\": \"Имя архитектора\",");
+        Console.WriteLine("    \"executor\": \"Имя исполнителя\",");
         Console.WriteLine("    \"btnOnText\": \"ВКЛ\",");
         Console.WriteLine("    \"btnOffText\": \"ВЫКЛ\"");
         Console.WriteLine("  }");
