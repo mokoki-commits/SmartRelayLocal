@@ -82,9 +82,11 @@ public static class TuyaProtocol
         byte[] encrypted = AesEcbEncrypt(localKey, payload);
         string b64 = Convert.ToBase64String(encrypted);
 
-        string pre = "data=" + b64 + "||lpv=3.1||" + Encoding.UTF8.GetString(localKey);
-        byte[] md5 = MD5.HashData(Encoding.UTF8.GetBytes(pre));
-        string md5Slice = Encoding.Latin1.GetString(md5, 8, 16);
+        string keyStr = Encoding.Latin1.GetString(localKey);
+        string pre = "data=" + b64 + "||lpv=3.1||" + keyStr;
+        byte[] md5Bytes = MD5.HashData(Encoding.UTF8.GetBytes(pre));
+        string md5Hex = Convert.ToHexString(md5Bytes).ToLowerInvariant();
+        string md5Slice = md5Hex.Substring(8, 16);
 
         byte[] msgPayload = Encoding.UTF8.GetBytes("3.1" + md5Slice + b64);
 
@@ -167,9 +169,10 @@ public static class TuyaProtocol
         try
         {
             string text = Encoding.UTF8.GetString(payload);
-            if (text.StartsWith("3.1"))
+            if (text.StartsWith("3.1") && text.Length > 19)
             {
-                string b64 = text.Substring(3 + 16);
+                // после "3.1" идут 16 символов среза MD5, затем base64
+                string b64 = text.Substring(19);
                 byte[] encrypted = Convert.FromBase64String(b64);
                 byte[] decrypted = AesEcbDecrypt(localKey, encrypted);
                 text = Encoding.UTF8.GetString(decrypted);
