@@ -1,7 +1,5 @@
 using System;
-using System.Collections.Generic;
 using System.IO;
-using System.Text.Json;
 using System.Windows.Forms;
 
 namespace SmartRelay;
@@ -17,10 +15,13 @@ class Program
         int port = TuyaProtocol.DefaultPort;
         int index = 1;
         int timeoutSec = 5;
-        string configPath = "smartrelay.json";
+        // по умолчанию конфиг лежит рядом с exe (двойной щёлчок, ярлык, .bat из другой папки)
+        string configPath = Path.Combine(AppContext.BaseDirectory, "smartrelay.json");
+        bool explicitConfig = false;
         string? action = null;
         bool guiMode = true;
         bool verbose = false;
+        bool? showDiagFlag = null;   // --no-diag / --show-diag перекрывают конфиг
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -32,7 +33,9 @@ class Program
                 case "--port": port = int.Parse(args[++i]); break;
                 case "--index": index = int.Parse(args[++i]); break;
                 case "--timeout": timeoutSec = int.Parse(args[++i]); break;
-                case "--config": configPath = args[++i]; break;
+                case "--config": configPath = args[++i]; explicitConfig = true; break;
+                case "--no-diag": case "--hide-diag": showDiagFlag = false; break;
+                case "--show-diag": showDiagFlag = true; break;
                 case "--verbose": case "-v": verbose = true; break;
                 case "on": case "off": case "status": case "toggle": case "diag":
                     action = args[i]; guiMode = false; break;
@@ -54,37 +57,51 @@ class Program
         string cfgBtnOn = "ВКЛ", cfgBtnOff = "ВЫКЛ", cfgVer = "3.4";
         int cfgPoll = 3000;
         bool cfgShowDiag = true;
+        string? cfgWarning = null;
         string? cfgArchitect = null, cfgExecutor = null;
 
-        if (File.Exists(configPath))
+        if (!explicitConfig && !File.Exists(configPath))
         {
-            try
-            {
-                var json = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(File.ReadAllText(configPath));
-                if (json != null)
-                {
-                    cfgDevId = GetStr(json, "dev_id");
-                    cfgKey = GetStr(json, "local_key");
-                    cfgIp = GetStr(json, "ip");
-                    if (json.TryGetValue("port", out var p)) cfgPort = p.GetInt32();
-                    if (json.TryGetValue("index", out var ix)) cfgIndex = ix.GetInt32();
-                    if (json.TryGetValue("timeout", out var t)) cfgTimeout = t.GetInt32();
-                    cfgBtnOn = GetStr(json, "btnOnText") ?? "ВКЛ";
-                    cfgBtnOff = GetStr(json, "btnOffText") ?? "ВЫКЛ";
-                    cfgVer = GetStr(json, "ver") ?? "3.4";
-                    if (json.TryGetValue("poll", out var pl)) cfgPoll = pl.GetInt32();
-                    cfgShowDiag = GetBool(json, "showDiag") ?? true;
-                    cfgArchitect = GetStr(json, "architect");
-                    cfgExecutor = GetStr(json, "executor");
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine("Не удалось прочитать " + configPath + ": " + ex.Message);
-            }
+            string inCwd = Path.Combine(Directory.GetCurrentDirectory(), "smartrelay.json");
+            if (File.Exists(inCwd))
+                configPath = inCwd;
         }
 
+        var cfg = AppConfig.Load(configPath);
+        cfgDevId = cfg.DevId;
+        cfgKey = cfg.LocalKey;
+        cfgIp = cfg.Ip;
+        cfgPort = cfg.Port ?? port;
+        cfgIndex = cfg.Index ?? index;
+        cfgTimeout = cfg.TimeoutSec ?? timeoutSec;
+        cfgBtnOn = cfg.BtnOn ?? "ВКЛ";
+        cfgBtnOff = cfg.BtnOff ?? "ВЫКЛ";
+        cfgVer = cfg.Ver ?? "3.4";
+        cfgPoll = cfg.PollMs ?? 3000;
+        cfgShowDiag = cfg.ShowDiag ?? true;
+        cfgArchitect = cfg.Architect;
+        cfgExecutor = cfg.Executor;
+        cfgWarning = cfg.Warning;
+
+        if (cfgWarning != null && guiMode)
+        {
+            MessageBox.Show(
+                cfgWarning + "\n\nБудут использованы значения по умолчанию:\n" +
+                "кнопка диагностики видна, опрос каждые 3 с.",
+                "SmartRelay — конфигурация", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+
+        if (showDiagFlag.HasValue)
+            cfgShowDiag = showDiagFlag.Value;
+
         AppInfo.Configure(cfgArchitect, cfgExecutor);
+
+        Diag.Log(AppInfo.Summary);
+        Diag.Log($"Конфиг: {(File.Exists(configPath) ? configPath : "не найден, значения по умолчанию")}");
+        Diag.Log($"Настройки: port={cfgPort}, index={cfgIndex}, ver={cfgVer}, timeout={cfgTimeout} с, " +
+                 $"poll={cfgPoll} мс, showDiag={(cfgShowDiag ? "true" : "false")}");
+        if (!string.IsNullOrWhiteSpace(cfgWarning))
+            Diag.Log("ВНИМАНИЕ: " + cfgWarning);
 
         devId ??= cfgDevId;
         localKey ??= cfgKey;
@@ -176,24 +193,6 @@ class Program
         }
     }
 
-    static string? GetStr(Dictionary<string, JsonElement> dict, string name)
-    {
-        return dict.TryGetValue(name, out var el) && el.ValueKind == JsonValueKind.String
-            ? el.GetString()
-            : null;
-    }
-
-    static bool? GetBool(Dictionary<string, JsonElement> dict, string name)
-    {
-        if (!dict.TryGetValue(name, out var el))
-            return null;
-        if (el.ValueKind == JsonValueKind.True)
-            return true;
-        if (el.ValueKind == JsonValueKind.False)
-            return false;
-        return el.ValueKind == JsonValueKind.String && bool.TryParse(el.GetString(), out bool b) ? b : null;
-    }
-
     static void PrintVersion()
     {
         Console.WriteLine(AppInfo.AboutText);
@@ -220,7 +219,9 @@ class Program
         Console.WriteLine("  --port      TCP порт (по умолчанию 6668; проверяются также 6667, 8886)");
         Console.WriteLine("  --index     Номер точки данных DP (по умолчанию 1)");
         Console.WriteLine("  --timeout   Таймаут сети, сек (по умолчанию 5)");
-        Console.WriteLine("  --config    Путь к JSON-конфигу (по умолчанию smartrelay.json)");
+        Console.WriteLine("  --config    Путь к JSON-конфигу (по умолчанию smartrelay.json рядом с exe)");
+        Console.WriteLine("  --no-diag   Скрыть кнопку «Диагностика (журнал)» (то же, что \"showDiag\": false)");
+        Console.WriteLine("  --show-diag Показать кнопку диагностики, даже если в конфиге false");
         Console.WriteLine("  --verbose   Подробный журнал с hex-дампами кадров");
         Console.WriteLine("  --version   Версия программы, лицензия и авторы (архитектор/исполнитель)");
         Console.WriteLine("  --gui       Запустить графическое окно");

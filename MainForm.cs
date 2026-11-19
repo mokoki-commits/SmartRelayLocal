@@ -1,5 +1,7 @@
 using System;
 using System.Drawing;
+using System.IO;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -7,10 +9,12 @@ using System.Windows.Forms;
 namespace SmartRelay;
 
 /// <summary>
-/// Окно управления розеткой: ВКЛ / ВЫКЛ, текущее состояние и диагностика.
-/// Состояние берётся с устройства по таймеру (один пакетный запрос статуса
-/// на постоянном TCP-соединении), поэтому видно и изменения, сделанные
-/// приложением SmartLife или кнопкой на самой розетке.
+/// Окно управления розеткой: ВКЛ / ВЫКЛ и динамическое состояние устройства.
+///
+/// Розеткой можно управлять не только отсюда: её меняет приложение SmartLife,
+/// сценарии и кнопка на корпусе, поэтому состояние перечитывается с устройства
+/// по таймеру. Под кнопками видно текущее состояние и дату/время последнего
+/// переключения, а также время последней успешной проверки.
 /// </summary>
 public class MainForm : Form
 {
@@ -21,13 +25,24 @@ public class MainForm : Form
 
     private readonly SmartPlug _plug;
     private readonly Label _stateLabel;
+    private readonly Label _checkedLabel;
     private readonly Label _statusLabel;
     private readonly Button _btnOn;
     private readonly Button _btnOff;
     private readonly Button _btnDiag;
     private readonly System.Windows.Forms.Timer _poll;
-    private bool? _lastState;
     private readonly int _pollMs;
+
+    /// <summary>
+    /// Последнее известное состояние: файл рядом с exe. Нужен, чтобы после
+    /// перезапуска показать реальное время переключения, а не время старта.
+    /// </summary>
+    private readonly string _stateFile = Path.Combine(AppContext.BaseDirectory, "smartrelay.state.json");
+
+    private bool? _lastState;
+    private DateTime _stateSince;
+    private bool? _savedState;
+    private DateTime? _savedSince;
     private int _busy;
 
     public MainForm(string devId, string localKey, string ip, int port, int index, int timeoutSec,
@@ -35,21 +50,15 @@ public class MainForm : Form
         bool showDiag = true)
     {
         _plug = new SmartPlug(devId, localKey, ip, port, index, timeoutSec, version);
-        Diag.Log(AppInfo.Summary);
+        Diag.Log($"Опрос состояния: {(pollMs > 0 ? $"каждые {pollMs} мс" : "выключен (poll=0)")}");
 
-        _stateLabel = new Label
-        {
-            Text = "Состояние: проверяю…",
-            Location = new Point(20, 12),
-            Size = new Size(305, 24),
-            Font = new Font("Segoe UI", 11, FontStyle.Bold),
-            ForeColor = Color.Gray
-        };
+        _pollMs = pollMs;
+        _poll = new System.Windows.Forms.Timer { Interval = pollMs < 1000 ? 3000 : pollMs };
 
         _btnOn = new Button
         {
             Text = btnOnText,
-            Location = new Point(20, 42),
+            Location = new Point(20, 18),
             Size = new Size(145, 50),
             Font = new Font("Segoe UI", 11, FontStyle.Bold),
             BackColor = OnColor,
@@ -62,7 +71,7 @@ public class MainForm : Form
         _btnOff = new Button
         {
             Text = btnOffText,
-            Location = new Point(180, 42),
+            Location = new Point(180, 18),
             Size = new Size(145, 50),
             Font = new Font("Segoe UI", 11, FontStyle.Bold),
             BackColor = OffColor,
@@ -72,11 +81,31 @@ public class MainForm : Form
         _btnOff.FlatAppearance.BorderSize = 0;
         _btnOff.Click += async (_, _) => await SetRelayAsync(false);
 
+        // Состояние — под кнопками, с датой и временем последнего переключения.
+        _stateLabel = new Label
+        {
+            Text = "Состояние: проверяю…",
+            Location = new Point(20, 74),
+            Size = new Size(305, 24),
+            Font = new Font("Segoe UI", 10.5f, FontStyle.Bold),
+            ForeColor = Color.Gray,
+            TextAlign = ContentAlignment.MiddleLeft
+        };
+
+        _checkedLabel = new Label
+        {
+            Text = "",
+            Location = new Point(20, 99),
+            Size = new Size(305, 16),
+            Font = new Font("Segoe UI", 8, FontStyle.Italic),
+            ForeColor = Color.Gray
+        };
+
         _statusLabel = new Label
         {
             Text = "Готово",
-            Location = new Point(20, 100),
-            Size = new Size(305, 40),
+            Location = new Point(20, 117),
+            Size = new Size(305, 38),
             Font = new Font("Segoe UI", 9),
             ForeColor = Color.Gray
         };
@@ -84,19 +113,31 @@ public class MainForm : Form
         _btnDiag = new Button
         {
             Text = "Диагностика (журнал)",
-            Location = new Point(20, 147),
+            Location = new Point(20, 158),
             Size = new Size(305, 32),
             Font = new Font("Segoe UI", 9),
             FlatStyle = FlatStyle.System
         };
         _btnDiag.Click += (_, _) =>
         {
-            using var form = new DiagForm(_plug);
-            form.ShowDialog(this);
+            // Пока открыта диагностика, периодический опрос не нужен:
+            // он засоряет журнал и занимает единственное соединение.
+            bool wasPolling = _pollMs > 0;
+            _poll.Stop();
+            try
+            {
+                using var form = new DiagForm(_plug);
+                form.ShowDialog(this);
+            }
+            finally
+            {
+                if (wasPolling)
+                    _poll.Start();
+            }
         };
 
         Text = $"{AppInfo.Title} — управление розеткой";
-        Size = new Size(361, showDiag ? 272 : 226);
+        Size = new Size(361, showDiag ? 280 : 238);
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
@@ -108,7 +149,7 @@ public class MainForm : Form
         var aboutLink = new LinkLabel
         {
             Text = $"v{AppInfo.Version} · {AppInfo.License} · О программе…",
-            Location = new Point(20, showDiag ? 190 : 148),
+            Location = new Point(20, showDiag ? 196 : 158),
             Size = new Size(305, 18),
             Font = new Font("Segoe UI", 8.5f),
             LinkColor = Color.SteelBlue,
@@ -120,15 +161,23 @@ public class MainForm : Form
             form.ShowDialog(this);
         };
 
+        var tip = new ToolTip { AutoPopDelay = 15000, InitialDelay = 400, ReshowDelay = 200 };
+        tip.SetToolTip(_stateLabel,
+            "Время — момент, когда программа увидела переключение." + Environment.NewLine +
+            "Розетку можно менять из SmartLife или кнопкой на корпусе —" + Environment.NewLine +
+            "состояние обновится автоматически.");
+        tip.SetToolTip(_checkedLabel, "Время последней успешной проверки состояния устройства.");
+
         Controls.Add(_stateLabel);
+        Controls.Add(_checkedLabel);
         Controls.Add(_btnOn);
         Controls.Add(_btnOff);
         Controls.Add(_statusLabel);
         Controls.Add(_btnDiag);
         Controls.Add(aboutLink);
 
-        _pollMs = pollMs;
-        _poll = new System.Windows.Forms.Timer { Interval = pollMs < 1000 ? 3000 : pollMs };
+        LoadSavedState();
+
         _poll.Tick += async (_, _) => await PollAsync();
 
         Shown += async (_, _) =>
@@ -148,6 +197,44 @@ public class MainForm : Form
     private bool TryBegin() => Interlocked.Exchange(ref _busy, 1) == 0;
     private void End() => Interlocked.Exchange(ref _busy, 0);
 
+    /// <summary>Читает сохранённое состояние (если файл есть и корректен).</summary>
+    private void LoadSavedState()
+    {
+        try
+        {
+            if (!File.Exists(_stateFile))
+                return;
+
+            using var doc = JsonDocument.Parse(File.ReadAllText(_stateFile));
+            var root = doc.RootElement;
+            if (root.TryGetProperty("on", out var onEl) &&
+                (onEl.ValueKind == JsonValueKind.True || onEl.ValueKind == JsonValueKind.False))
+                _savedState = onEl.GetBoolean();
+            if (root.TryGetProperty("since", out var sinceEl) && sinceEl.TryGetDateTime(out var dt))
+                _savedSince = dt;
+        }
+        catch
+        {
+            // файл состояния вспомогательный: ошибки чтения не критичны
+        }
+    }
+
+    private void SaveState()
+    {
+        try
+        {
+            if (!_lastState.HasValue)
+                return;
+
+            string json = $"{{\"on\":{(_lastState.Value ? "true" : "false")},\"since\":\"{_stateSince:yyyy-MM-ddTHH:mm:ss}\"}}";
+            File.WriteAllText(_stateFile, json);
+        }
+        catch
+        {
+            // нет прав на запись — время определится при следующем запуске
+        }
+    }
+
     /// <summary>Периодический опрос: один пакетный запрос статуса (0x10 / 0x0A) на всё устройство.</summary>
     private async Task PollAsync()
     {
@@ -156,22 +243,26 @@ public class MainForm : Form
 
         try
         {
+            // Журнал не засоряем: служебные строки опроса пишутся только в подробном режиме.
+            _plug.QuietLog = true;
             var result = await Task.Run(() => _plug.Status());
+
             if (result.Ok && result.Value.HasValue)
             {
-                bool first = _lastState == null;
+                bool recovered = _statusLabel.Text.StartsWith("Нет связи", StringComparison.Ordinal);
                 UpdateState(result.Value.Value);
-                if (first)
-                    SetStatus(result.Message, Color.Gray);
+                UpdateChecked();
+                if (recovered)
+                    SetStatus("Связь восстановлена.", Color.Gray);
             }
-            else if (_lastState == null)
+            else if (_lastState == null && !_savedState.HasValue)
             {
+                ShowDisconnected();
                 SetStatus("Нет связи: " + result.Message, Color.Red);
             }
             else
             {
-                _stateLabel.Text = "Состояние: нет связи";
-                _stateLabel.ForeColor = Color.Red;
+                ShowDisconnected();
             }
         }
         catch (Exception ex)
@@ -180,6 +271,7 @@ public class MainForm : Form
         }
         finally
         {
+            _plug.QuietLog = false;
             End();
         }
     }
@@ -200,10 +292,14 @@ public class MainForm : Form
 
         try
         {
+            _plug.QuietLog = false;
             var result = await Task.Run(() => on ? _plug.TurnOn() : _plug.TurnOff());
 
             if (result.Ok && result.Value.HasValue)
+            {
                 UpdateState(result.Value.Value);
+                UpdateChecked();
+            }
 
             if (result.Ok)
                 SetStatus(result.Message, result.Value.HasValue ? Color.Green : Color.DarkOrange);
@@ -219,24 +315,81 @@ public class MainForm : Form
             _btnOn.Enabled = true;
             _btnOff.Enabled = true;
             _btnDiag.Enabled = true;
+            _plug.QuietLog = false;
             End();
         }
     }
 
-    /// <summary>Отражает реальное состояние устройства: надпись и подсветка кнопок.</summary>
+    /// <summary>
+    /// Отражает реальное состояние устройства: подсветка кнопок, надпись под ними
+    /// и дата/время переключения. Вызывается и из опроса, и из команд.
+    /// </summary>
     private void UpdateState(bool on)
     {
         if (InvokeRequired)
         {
-            Invoke(new Action<bool>(UpdateState), on);
+            try { Invoke(new Action<bool>(UpdateState), on); } catch { }
             return;
         }
 
-        _lastState = on;
-        _stateLabel.Text = on ? "Состояние: ВКЛ" : "Состояние: ВЫКЛ";
+        if (!_lastState.HasValue)
+        {
+            // Первый ответ устройства:
+            //  • состояние совпало с сохранённым → переключения не было, время сохраняем;
+            //  • не совпало → розетку переключили без нас (SmartLife/кнопка), время — сейчас.
+            _stateSince = _savedState.HasValue && _savedState.Value == on && _savedSince.HasValue
+                ? _savedSince.Value
+                : DateTime.Now;
+            _lastState = on;
+            SaveState();
+        }
+        else if (_lastState.Value != on)
+        {
+            _lastState = on;
+            _stateSince = DateTime.Now;   // переключение произошло только что
+            SaveState();
+        }
+
+        _stateLabel.Text = on
+            ? $"Сейчас ВКЛ · с {_stateSince:dd.MM.yyyy HH:mm:ss}"
+            : $"Сейчас ВЫКЛ · с {_stateSince:dd.MM.yyyy HH:mm:ss}";
         _stateLabel.ForeColor = on ? OnColor : OffColor;
         _btnOn.BackColor = on ? OnColor : IdleOnColor;
         _btnOff.BackColor = on ? IdleOffColor : OffColor;
+    }
+
+    /// <summary>Связи нет: показываем последнее известное состояние и его время.</summary>
+    private void ShowDisconnected()
+    {
+        bool? last = _lastState ?? _savedState;
+        DateTime? since = _lastState.HasValue ? _stateSince : _savedSince;
+
+        if (last.HasValue && since.HasValue)
+        {
+            string word = last.Value ? "ВКЛ" : "ВЫКЛ";
+            _stateLabel.Text = $"Нет связи · последнее: {word} с {since.Value:dd.MM.yyyy HH:mm:ss}";
+            _stateLabel.ForeColor = Color.Red;
+            _btnOn.BackColor = last.Value ? OnColor : IdleOnColor;
+            _btnOff.BackColor = last.Value ? IdleOffColor : OffColor;
+        }
+        else
+        {
+            _stateLabel.Text = "Нет связи · состояние неизвестно";
+            _stateLabel.ForeColor = Color.Red;
+        }
+    }
+
+    private void UpdateChecked()
+    {
+        if (InvokeRequired)
+        {
+            try { Invoke(new Action(UpdateChecked)); } catch { }
+            return;
+        }
+
+        _checkedLabel.Text = _pollMs > 0
+            ? $"Проверено в {DateTime.Now:HH:mm:ss} · опрос каждые {_pollMs / 1000.0:0.#} с"
+            : $"Проверено в {DateTime.Now:HH:mm:ss} · автоопрос выключен";
     }
 
     private void SetStatus(string text, Color color)

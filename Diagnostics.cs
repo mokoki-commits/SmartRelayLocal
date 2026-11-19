@@ -16,6 +16,9 @@ public static class Diag
 
     public static bool Verbose { get; set; }
     public static string LogFile { get; set; } = Path.Combine(AppContext.BaseDirectory, "smartrelay.log");
+
+    /// <summary>Предельный размер журнала: при превышении файл уезжает в smartrelay.log.1 (хранится одна копия).</summary>
+    public const long MaxLogBytes = 1024 * 1024;
     public static event Action<string>? OnLog;
 
     public static void Log(string message)
@@ -36,6 +39,7 @@ public static class Diag
         lock (Sync)
         {
             try { Console.WriteLine(line); } catch { }
+            RotateIfNeeded();
             try
             {
                 File.AppendAllText(LogFile, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} {line.Substring(13)}{Environment.NewLine}",
@@ -44,6 +48,26 @@ public static class Diag
             catch { }
         }
         try { OnLog?.Invoke(line); } catch { }
+    }
+
+    /// <summary>Не даём журналу расти бесконечно: старше 1 МБ — в smartrelay.log.1.</summary>
+    private static void RotateIfNeeded()
+    {
+        try
+        {
+            var info = new FileInfo(LogFile);
+            if (!info.Exists || info.Length < MaxLogBytes)
+                return;
+
+            string backup = LogFile + ".1";
+            if (File.Exists(backup))
+                File.Delete(backup);
+            info.MoveTo(backup);
+        }
+        catch
+        {
+            // журнал может быть занят другим процессом — не мешаем работе
+        }
     }
 
     public static void Hex(string title, byte[]? data)

@@ -68,6 +68,21 @@ public class SmartPlug : IDisposable
     /// <summary>Последняя ошибка человеческим языком.</summary>
     public string? LastError { get; private set; }
 
+    /// <summary>
+    /// Тихий режим для периодического опроса: служебные сообщения (подключение,
+    /// выбор порта, согласование ключа) пишутся только в подробный журнал,
+    /// чтобы файл не рос каждые 3 секунды. Ошибки и предупреждения пишутся всегда.
+    /// </summary>
+    public bool QuietLog { get; set; }
+
+    private void Log(string message)
+    {
+        if (QuietLog)
+            Diag.Detail(message);
+        else
+            Diag.Log(message);
+    }
+
     private Socket? _sock;
     private uint _seqno;
     private byte[]? _sessionKey;
@@ -108,7 +123,7 @@ public class SmartPlug : IDisposable
     private void OpenSocket(int port)
     {
         Close();
-        Diag.Log($"TCP: подключение к {Ip}:{port} ...");
+        Log($"TCP: подключение к {Ip}:{port} ...");
         var sock = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp)
         {
             NoDelay = true,
@@ -119,7 +134,7 @@ public class SmartPlug : IDisposable
         _sock = sock;
         _seqno = 0;
         ActivePort = port;
-        Diag.Log($"TCP: соединение установлено ({Ip}:{port})");
+        Log($"TCP: соединение установлено ({Ip}:{port})");
     }
 
     /// <summary>Гарантировать активное соединение (и handshake для 3.4).</summary>
@@ -139,7 +154,11 @@ public class SmartPlug : IDisposable
         foreach (int p in ports)
         {
             var (ok, ms, msg) = NetProbe.TestTcp(Ip, p, (int)Timeout.TotalMilliseconds);
-            Diag.Log($"TCP {Ip}:{p} → {(ok ? "открыт" : "закрыт")} ({ms} мс): {msg}");
+            // успешную проверку порта при тихом опросе не пишем, отказ — пишем всегда
+            if (ok)
+                Log($"TCP {Ip}:{p} → открыт ({ms} мс): {msg}");
+            else
+                Diag.Log($"TCP {Ip}:{p} → закрыт ({ms} мс): {msg}");
             if (!ok)
             {
                 errors.Add($"порт {p}: {msg}");
@@ -268,7 +287,7 @@ public class SmartPlug : IDisposable
     /// <summary>Согласование сессионного ключа 3.4 (схема tinytuya: nonce + XOR + HMAC).</summary>
     private bool NegotiateSessionKey()
     {
-        Diag.Log("3.4: старт согласования сессионного ключа");
+        Log("3.4: старт согласования сессионного ключа");
 
         byte[] localNonce = TuyaProtocol.GenerateNonce(16);
         Diag.Hex("   nonce1 (наш)", localNonce);
@@ -332,7 +351,7 @@ public class SmartPlug : IDisposable
             return false;
         }
 
-        Diag.Log($"   шаг 2: cmd=0x{frame.Cmd:X2}, retcode={frame.Retcode}, payload={frame.Payload.Length} байт");
+        Log($"   шаг 2: cmd=0x{frame.Cmd:X2}, retcode={frame.Retcode}, payload={frame.Payload.Length} байт");
         Diag.Hex("   расшифрованный ответ 0x04", decrypted);
 
         byte[] remoteNonce = decrypted.AsSpan(0, 16).ToArray();
@@ -353,7 +372,7 @@ public class SmartPlug : IDisposable
 
         _sessionKey = TuyaProtocol.DeriveSessionKey34(LocalKey, localNonce, remoteNonce);
         Diag.Hex("   сессионный ключ = AES-ECB(local_key, nonce1 XOR nonce2)", _sessionKey);
-        Diag.Log("3.4: сессионный ключ согласован успешно");
+        Log("3.4: сессионный ключ согласован успешно");
         return true;
     }
 

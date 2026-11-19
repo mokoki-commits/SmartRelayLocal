@@ -16,3 +16,7 @@ nuget.config
 
 # Local config (user-specific keys — do not commit real keys)
 smartrelay.json
+# Состояние, которое программа пишет сама
+smartrelay.state.json
+smartrelay.log
+smartrelay.log.1

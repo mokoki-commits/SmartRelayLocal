@@ -1,20 +1,34 @@
 using System;
+using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace SmartRelay;
 
-/// <summary>Окно расширенной диагностики с живым журналом.</summary>
+/// <summary>
+/// Окно расширенной диагностики с живым журналом.
+///
+/// Живой вывод включён только на время проверки и не дольше <see cref="MaxRunSeconds"/>
+/// секунд: затем подписка на журнал снимается, подробный режим выключается, и окно
+/// перестаёт получать сообщения фонового опроса (иначе они шли бы бесконечно).
+/// </summary>
 public class DiagForm : Form
 {
+    /// <summary>Предельная длительность одной проверки, секунд.</summary>
+    public const int MaxRunSeconds = 30;
+
     private readonly SmartPlug _plug;
     private readonly TextBox _log;
     private readonly Button _btnRun;
     private readonly Button _btnCopy;
     private readonly Button _btnSave;
+
+    private CancellationTokenSource? _cts;
+    private bool _running;
 
     public DiagForm(SmartPlug plug)
     {
@@ -64,7 +78,7 @@ public class DiagForm : Form
             }
         };
 
-        Text = "SmartRelay — диагностика";
+        Text = $"SmartRelay — диагностика (не дольше {MaxRunSeconds} с)";
         Size = new Size(800, 525);
         MinimumSize = new Size(640, 400);
         StartPosition = FormStartPosition.CenterParent;
@@ -73,9 +87,13 @@ public class DiagForm : Form
         Controls.Add(_btnCopy);
         Controls.Add(_btnSave);
 
-        Diag.OnLog += AppendLog;
-        FormClosed += (_, _) => Diag.OnLog -= AppendLog;
         Shown += async (_, _) => await RunAsync();
+        FormClosed += (_, _) =>
+        {
+            Diag.OnLog -= AppendLog;
+            try { _cts?.Cancel(); } catch { }
+            Diag.Verbose = false;
+        };
     }
 
     private void AppendLog(string line)
@@ -94,14 +112,39 @@ public class DiagForm : Form
 
     private async Task RunAsync()
     {
+        if (_running)
+            return;
+
+        _running = true;
         _btnRun.Enabled = false;
+        var sw = Stopwatch.StartNew();
+
         try
         {
             _log.Clear();
-            Diag.Verbose = true;
+            AppendLog($"SmartRelay {AppInfo.Version} — диагностика, лимит {MaxRunSeconds} с");
             AppendLog($"Журнал: {Diag.LogFile}");
             AppendLog("");
-            await Task.Run(() => _plug.BuildDiagnosticsReport());
+
+            Diag.Verbose = true;
+            Diag.OnLog += AppendLog;      // живой журнал — только на время проверки
+
+            _cts = new CancellationTokenSource();
+            var task = Task.Run(() => _plug.BuildDiagnosticsReport(), _cts.Token);
+            var limit = Task.Delay(TimeSpan.FromSeconds(MaxRunSeconds));
+
+            if (await Task.WhenAny(task, limit) == task)
+            {
+                await task;               // пробросит исключение, если проверка упала
+                AppendLog("");
+                AppendLog($"OK: диагностика завершена за {sw.Elapsed.TotalSeconds:0.0} с.");
+            }
+            else
+            {
+                AppendLog("");
+                AppendLog($"СТОП: прошло {MaxRunSeconds} с — живой вывод остановлен по лимиту.");
+                AppendLog("Остальные строки дописываются только в файл журнала.");
+            }
         }
         catch (Exception ex)
         {
@@ -109,7 +152,30 @@ public class DiagForm : Form
         }
         finally
         {
+            Diag.OnLog -= AppendLog;      // фоновый опрос больше не подмешивается в окно
+            Diag.Verbose = false;
+            try { _cts?.Dispose(); } catch { }
+            _cts = null;
+            _running = false;
             _btnRun.Enabled = true;
+
+            AppendLog("");
+            AppendLog($"— конец вывода. Файл журнала: {Diag.LogFile} ({LogFileSize()})");
+        }
+    }
+
+    private static string LogFileSize()
+    {
+        try
+        {
+            if (!File.Exists(Diag.LogFile))
+                return "файла нет";
+            long bytes = new FileInfo(Diag.LogFile).Length;
+            return bytes < 1024 ? $"{bytes} байт" : $"{bytes / 1024.0:0.#} КБ";
+        }
+        catch
+        {
+            return "размер неизвестен";
         }
     }
 }

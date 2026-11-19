@@ -9,14 +9,21 @@
     <Nullable>enable</Nullable>
 
     <!-- Версия и сведения о программе: попадают в окно «О программе» и в свойства exe -->
-    <Version>5.0.0</Version>
-    <AssemblyVersion>5.0.0.0</AssemblyVersion>
-    <FileVersion>5.0.0.0</FileVersion>
+    <Version>5.0.2</Version>
+    <AssemblyVersion>5.0.2</AssemblyVersion>
+    <FileVersion>5.0.2</FileVersion>
     <Product>SmartRelay</Product>
     <Company>avk013</Company>
     <Copyright>© 2026 avk013 · лицензия MIT</Copyright>
     <Description>Локальное управление розеткой SmartLife / Tuya по LAN (протокол 3.4 / 3.1)</Description>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- tests/ — отдельный проект проверки конфига, в сборку приложения не входит -->
+    <Compile Remove="tests/**" />
+    <EmbeddedResource Remove="tests/**" />
+    <None Remove="tests/**" />
+  </ItemGroup>
 
   <ItemGroup>
     <!-- шаблон конфига кладём рядом с exe, чтобы его было легко скопировать в smartrelay.json -->
