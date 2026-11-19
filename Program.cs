@@ -48,7 +48,7 @@ class Program
 
         string? cfgDevId = null, cfgKey = null, cfgIp = null;
         int cfgPort = port, cfgIndex = index, cfgTimeout = timeoutSec;
-        string cfgBtnOn = "ВКЛ", cfgBtnOff = "ВЫКЛ", cfgVer = "3.1";
+        string cfgBtnOn = "ВКЛ", cfgBtnOff = "ВЫКЛ", cfgVer = "3.4";
 
         if (File.Exists(configPath))
         {
@@ -65,7 +65,7 @@ class Program
                     if (json.TryGetValue("timeout", out var t)) cfgTimeout = t.GetInt32();
                     cfgBtnOn = GetStr(json, "btnOnText") ?? "ВКЛ";
                     cfgBtnOff = GetStr(json, "btnOffText") ?? "ВЫКЛ";
-                    cfgVer = GetStr(json, "ver") ?? "3.1";
+                    cfgVer = GetStr(json, "ver") ?? "3.4";
                 }
             }
             catch (Exception ex)

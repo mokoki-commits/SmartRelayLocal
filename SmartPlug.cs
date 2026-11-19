@@ -43,8 +43,18 @@ public class SmartPlug : IDisposable
     public int Port { get; }
     public int Index { get; }
     public TimeSpan Timeout { get; }
+    /// <summary>Версия из конфига (в отличие от Version, которая может быть определена автоматически).</summary>
+    public string ConfiguredVersion { get; }
+
+    /// <summary>Фактически используемая версия: из конфига либо определённая автоматически.</summary>
     public string Version { get; set; }
     public bool PortFallback { get; set; } = true;
+
+    /// <summary>
+    /// Если true (по умолчанию) и с версией из конфига связи нет, пробуем другую версию (3.4 ↔ 3.1).
+    /// Диагностике это отключается, чтобы она честно показывала результат каждой версии.
+    /// </summary>
+    public bool AutoDetectVersion { get; set; } = true;
 
     /// <summary>Порт, на котором реально установлено соединение.</summary>
     public int ActivePort { get; private set; }
@@ -55,12 +65,15 @@ public class SmartPlug : IDisposable
     private Socket? _sock;
     private uint _seqno;
     private byte[]? _sessionKey;
+
+    /// <summary>Предупреждение о несовпадении версии; печатается после первой успешной операции.</summary>
+    private string? _pendingVersionNote;
     private int _forcePort = -1;
 
     private double VersionNumber => TuyaProtocol.VersionToNumber(Version);
 
     public SmartPlug(string devId, string localKey, string ip,
-        int port = TuyaProtocol.DefaultPort, int index = 1, int timeoutSec = 5, string version = "3.1")
+        int port = TuyaProtocol.DefaultPort, int index = 1, int timeoutSec = 5, string version = "3.4")
     {
         DevId = string.IsNullOrWhiteSpace(devId) ? throw new ArgumentException("Device ID не задан.") : devId.Trim();
         LocalKey = TuyaProtocol.NormalizeKey(localKey);
@@ -68,7 +81,8 @@ public class SmartPlug : IDisposable
         Port = port;
         Index = index;
         Timeout = TimeSpan.FromSeconds(timeoutSec <= 0 ? 5 : timeoutSec);
-        Version = string.IsNullOrWhiteSpace(version) ? "3.1" : version.Trim();
+        Version = string.IsNullOrWhiteSpace(version) ? "3.4" : version.Trim();
+        ConfiguredVersion = Version;
     }
 
     public void Dispose() => Close();
@@ -79,6 +93,7 @@ public class SmartPlug : IDisposable
         try { _sock?.Dispose(); } catch { }
         _sock = null;
         _sessionKey = null;
+        _pendingVersionNote = null;
     }
 
     private void OpenSocket(int port)
@@ -109,6 +124,8 @@ public class SmartPlug : IDisposable
             : (PortFallback ? NetProbe.CandidatePorts(Port) : new List<int> { Port });
 
         var errors = new List<string>();
+        string configuredVersion = Version;
+        var versions = VersionCandidates().ToList();
 
         foreach (int p in ports)
         {
@@ -120,31 +137,55 @@ public class SmartPlug : IDisposable
                 continue;
             }
 
-            try
+            foreach (string ver in versions)
             {
-                OpenSocket(p);
-
-                if (VersionNumber >= 3.4 && !NegotiateSessionKey())
+                Version = ver;
+                try
                 {
-                    errors.Add($"порт {p}: handshake 3.4 не удался — {LastError}");
-                    Close();
-                    continue;
-                }
+                    OpenSocket(p);
 
-                if (p != Port)
-                    Diag.Log($"ВНИМАНИЕ: устройство отвечает на порту {p}, а в конфиге указан {Port}. Укажите \"port\": {p}.");
-                return;
-            }
-            catch (Exception ex)
-            {
-                errors.Add($"порт {p}: {ex.Message}");
-                Close();
+                    if (VersionNumber >= 3.4 && !NegotiateSessionKey())
+                    {
+                        errors.Add($"порт {p}, версия {ver}: handshake не удался — {LastError}");
+                        Close();
+                        continue;
+                    }
+
+                    // Для 3.1 рукопожатия нет, поэтому факт соединения ещё ничего не подтверждает.
+                    // Предупреждение откладываем до первой успешной операции (_pendingVersionNote).
+                    if (ver != configuredVersion)
+                        _pendingVersionNote = $"ВНИМАНИЕ: устройство работает по протоколу {ver}, а в конфиге указано {configuredVersion}. " +
+                                              $"Исправьте \"ver\": \"{ver}\" в smartrelay.json.";
+                    if (p != Port)
+                        Diag.Log($"ВНИМАНИЕ: устройство отвечает на порту {p}, а в конфиге указан {Port}. Укажите \"port\": {p}.");
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    errors.Add($"порт {p}, версия {ver}: {ex.Message}");
+                    Close();
+                }
             }
         }
 
+        Version = configuredVersion;
         throw new TuyaException("Не удалось установить связь с розеткой: " + errors[0] +
             (errors.Count > 1 ? $" (ещё {errors.Count - 1} неудачных попыток — подробности в журнале)" : ""));
     }
+
+    /// <summary>Версия из конфига, затем (если разрешено) альтернативная.</summary>
+    private IEnumerable<string> VersionCandidates()
+    {
+        yield return Version;
+        if (!AutoDetectVersion)
+            yield break;
+        yield return VersionNumber >= 3.4 ? "3.1" : "3.4";
+    }
+
+    /// <summary>Device ID в отчётах показываем частично — журнал можно пересылать безопасно.</summary>
+    private static string MaskId(string id) =>
+        id.Length <= 8 ? new string('*', id.Length)
+                       : id.Substring(0, 4) + "…" + id.Substring(id.Length - 4);
 
     private void Send(byte[] frame)
     {
@@ -308,11 +349,63 @@ public class SmartPlug : IDisposable
     }
 
     /// <summary>
+    /// Выполняет операцию; при обрыве, характерном для неверной версии протокола,
+    /// один раз повторяет её с другой версией (3.4 ↔ 3.1).
+    /// </summary>
+    private PlugResult Execute(bool query, Dictionary<string, object>? dps)
+    {
+        var res = ExecuteCore(query, dps);
+        if (res.Ok)
+        {
+            NoteVersionMismatch();
+            return res;
+        }
+        if (!AutoDetectVersion || !LooksLikeProtocolMismatch(res.Message))
+            return res;
+
+        string tried = Version;
+        string alt = VersionNumber >= 3.4 ? "3.1" : "3.4";
+        Diag.Log($"ВНИМАНИЕ: версия {tried} не подтвердилась ({res.Message}). Пробую {alt}...");
+        Version = alt;
+        Close();
+
+        var retry = ExecuteCore(query, dps);
+        if (retry.Ok)
+        {
+            _pendingVersionNote ??= $"ВНИМАНИЕ: устройство работает по протоколу {alt}, а в конфиге указано {ConfiguredVersion}. " +
+                                    $"Исправьте \"ver\": \"{alt}\" в smartrelay.json.";
+            NoteVersionMismatch();
+            return retry;
+        }
+
+        Version = ConfiguredVersion;
+        Close();
+        return PlugResult.Fail($"{res.Message} (версия {alt}: {retry.Message}). " +
+                               "Если порт открыт, но обе версии обрываются — проверьте local_key в smartrelay.json.");
+    }
+
+    /// <summary>Один раз на соединение сообщает, что версия протокола в конфиге не совпадает с фактической.</summary>
+    private void NoteVersionMismatch()
+    {
+        if (_pendingVersionNote == null)
+            return;
+        Diag.Log(_pendingVersionNote);
+        _pendingVersionNote = null;
+    }
+
+    /// <summary>Признаки того, что устройство отвергло кадр из-за несовпадения версии протокола.</summary>
+    private static bool LooksLikeProtocolMismatch(string msg) =>
+        msg.Contains("закрыл", StringComparison.OrdinalIgnoreCase) ||
+        msg.Contains("таймаут", StringComparison.OrdinalIgnoreCase) ||
+        msg.Contains("timeout", StringComparison.OrdinalIgnoreCase) ||
+        msg.Contains("Ответ не получен", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
     /// Отправить команду и разобрать ответ.
     /// 3.4+: CONTROL_NEW (0x0D) с {"protocol":5,"t":...,"data":{"dps":...}} и
     /// DP_QUERY_NEW (0x10) с "{}"; 3.1: старые 0x07/0x0A с плоским JSON.
     /// </summary>
-    private PlugResult Execute(bool query, Dictionary<string, object>? dps)
+    private PlugResult ExecuteCore(bool query, Dictionary<string, object>? dps)
     {
         try
         {
@@ -487,7 +580,7 @@ public class SmartPlug : IDisposable
         Add($"IP:             {Ip}");
         Add($"Порт в конфиге: {Port}");
         Add($"Версия:         {Version}");
-        Add($"Device ID:      {DevId}");
+        Add($"Device ID:      {MaskId(DevId)} (частично скрыт)");
         Add($"Local Key:      {LocalKey.Length} байт (скрыт)");
         Add($"Index (DP):     {Index}");
         Add("");
@@ -519,7 +612,9 @@ public class SmartPlug : IDisposable
             foreach (string ver in new[] { "3.4", "3.1" })
             {
                 string saved = Version;
+                bool savedAuto = AutoDetectVersion;
                 Version = ver;
+                AutoDetectVersion = false;   // в диагностике версии проверяем строго по одной
                 _forcePort = p;
                 Close();
 
@@ -528,6 +623,7 @@ public class SmartPlug : IDisposable
                 Add("    → " + (res.Ok ? "УСПЕХ: " + res.Message : "неудача: " + res.Message));
 
                 Version = saved;
+                AutoDetectVersion = savedAuto;
                 if (res.Ok)
                     break;
             }
