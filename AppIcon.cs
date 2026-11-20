@@ -5,9 +5,9 @@ using System.IO;
 namespace SmartRelay;
 
 /// <summary>
-/// Значок программы из файла рядом с exe (smartrelay.bmp / smartrealy.bmp / smartrelay.png / .ico).
-/// Формат BMP/PNG превращается в значок на ходу, поэтому отдельный .ico не нужен:
-/// достаточно положить картинку в папку программы.
+/// Значок программы из файла рядом с exe: smartrelay.ico (готовый многоразмерный значок),
+/// smartrelay.png или smartrelay.bmp (картинка превращается в значок на ходу).
+/// Порядок поиска: .ico, затем .png, затем .bmp.
 /// Если файла нет или он не читается — окно и трей работают со значком по умолчанию.
 /// </summary>
 public static class AppIcon
@@ -15,8 +15,9 @@ public static class AppIcon
     /// <summary>Имена, которые ищутся рядом с exe (в порядке приоритета).</summary>
     private static readonly string[] FileNames =
     {
-        "smartrelay.ico", "smartrealy.ico", "smartrelay.bmp", "smartrealy.bmp", "smartleray.bmp",
-        "smartrelay.png", "smartrealy.png"
+        "smartrelay.ico", "smartrealy.ico",
+        "smartrelay.png", "smartrealy.png",
+        "smartrelay.bmp", "smartrealy.bmp", "smartleray.bmp"
     };
 
     private static bool _loaded;
@@ -62,7 +63,7 @@ public static class AppIcon
             return;
         }
 
-        Diag.Log("Значок программы: файл smartrelay.bmp не найден рядом с exe — используется стандартный");
+        Diag.Log("Значок программы: файл smartrelay.ico (или .png, .bmp) не найден рядом с exe — используется стандартный");
     }
 
     /// <summary>

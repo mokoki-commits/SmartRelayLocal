@@ -280,7 +280,7 @@ class Program
             : cfg.TaskbarKeyFound ? Path.GetFileName(configPath) : "значение по умолчанию";
         Console.WriteLine($"  панель задач: {(taskbar ? "ДА, окно видно и на панели задач" : "НЕТ, только трей")}   (источник: {taskbarWhere})");
         Console.WriteLine("  изменить: \"taskbar\": false (или true) в smartrelay.json рядом с exe, ключи --no-taskbar / --taskbar");
-        Console.WriteLine($"  значок:   {AppIcon.SourcePath ?? "smartrelay.bmp рядом с exe не найден — стандартный значок"}");
+        Console.WriteLine($"  значок:   {AppIcon.SourcePath ?? "smartrelay.ico / .png рядом с exe не найден — стандартный значок"}");
         if (!string.IsNullOrWhiteSpace(cfg.Warning))
             Console.WriteLine("  ВНИМАНИЕ: " + cfg.Warning);
         Console.WriteLine();

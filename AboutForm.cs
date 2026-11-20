@@ -58,7 +58,7 @@ public class AboutForm : Form
         AcceptButton = btnOk;
         CancelButton = btnOk;
 
-        // значок из smartrelay.bmp рядом с exe (если файл есть)
+        // значок из smartrelay.ico (.png, .bmp) рядом с exe (если файл есть)
         if (AppIcon.Large != null)
             Icon = AppIcon.Large;
 

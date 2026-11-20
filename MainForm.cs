@@ -145,7 +145,7 @@ public class MainForm : Form
         MaximizeBox = false;
         Padding = new Padding(10);
 
-        // Значок окна и трея берётся из картинки рядом с exe (smartrelay.bmp).
+        // Значок окна и трея берётся из файла рядом с exe (smartrelay.ico, затем .png, затем .bmp).
         if (AppIcon.Large != null)
             Icon = AppIcon.Large;
 

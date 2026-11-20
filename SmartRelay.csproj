@@ -9,13 +9,15 @@
     <Nullable>enable</Nullable>
 
     <!-- Версия и сведения о программе: попадают в окно «О программе» и в свойства exe -->
-    <Version>6.0.0</Version>
-    <AssemblyVersion>6.0.0</AssemblyVersion>
-    <FileVersion>6.0.0</FileVersion>
+    <Version>6.0.1</Version>
+    <AssemblyVersion>6.0.1</AssemblyVersion>
+    <FileVersion>6.0.1</FileVersion>
     <Product>SmartRelay</Product>
     <Company>avk013</Company>
     <Copyright>© 2026 avk013 · лицензия MIT</Copyright>
     <Description>Локальное управление розеткой SmartLife / Tuya по LAN (протокол 3.4 / 3.1)</Description>
+    <!-- значок файла SmartRelay.exe для Проводника и панели задач (кадры 16–256 в одном .ico) -->
+    <ApplicationIcon>smartrelay.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
@@ -31,8 +33,8 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </None>
-    <!-- значок программы: окно и трей берут картинку рядом с exe (AppIcon.cs), .ico не нужен -->
-    <None Update="smartrelay.bmp;smartrealy.bmp;smartleray.bmp;smartrelay.png;smartrelay.ico">
+    <!-- значок программы: готовый .ico (окно, трей, exe) либо картинка .png/.bmp рядом с exe (AppIcon.cs) -->
+    <None Update="smartrelay.ico;smartrelay.png;smartrelay.bmp;smartrealy.bmp;smartleray.bmp">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </None>
