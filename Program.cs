@@ -27,6 +27,7 @@ class Program
         bool guiMode = true;
         bool verbose = false;
         bool? showDiagFlag = null;   // --no-diag / --show-diag перекрывают конфиг
+        bool? taskbarFlag = null;    // --no-taskbar / --taskbar: окно только в трее или ещё и на панели задач
         bool printSettings = false;  // --settings: показать действующие настройки и выйти
 
         for (int i = 0; i < args.Length; i++)
@@ -42,6 +43,8 @@ class Program
                 case "--config": configPath = args[++i]; explicitConfig = true; break;
                 case "--no-diag": case "--hide-diag": showDiagFlag = false; break;
                 case "--show-diag": showDiagFlag = true; break;
+                case "--no-taskbar": case "--tray-only": taskbarFlag = false; break;
+                case "--taskbar": taskbarFlag = true; break;
                 case "--verbose": case "-v": verbose = true; break;
                 case "--settings": case "--config-check": printSettings = true; guiMode = false; break;
                 case "on": case "off": case "status": case "toggle": case "diag":
@@ -64,6 +67,7 @@ class Program
         string cfgBtnOn = "ВКЛ", cfgBtnOff = "ВЫКЛ", cfgVer = "3.4";
         int cfgPoll = 3000;
         bool cfgShowDiag = true;
+        bool cfgTaskbar = true;
         string? cfgWarning = null;
         string? cfgArchitect = null, cfgExecutor = null;
 
@@ -87,6 +91,8 @@ class Program
         cfgPoll = cfg.PollMs ?? 3000;
         // Кнопка диагностики: флаг командной строки важнее файла, файл важнее умолчания (true).
         cfgShowDiag = AppConfig.ResolveShowDiag(cfg, showDiagFlag);
+        // Панель задач: программа живёт в трее всегда; taskbar решает, быть ли окну ещё и на панели задач.
+        cfgTaskbar = AppConfig.ResolveTaskbar(cfg, taskbarFlag);
         cfgArchitect = cfg.Architect;
         cfgExecutor = cfg.Executor;
         cfgWarning = cfg.Warning;
@@ -105,17 +111,21 @@ class Program
         string diagSource = showDiagFlag.HasValue
             ? "командная строка"
             : cfg.ShowDiagKeyFound ? Path.GetFileName(configPath) : "по умолчанию";
+        string taskbarSource = taskbarFlag.HasValue
+            ? "командная строка"
+            : cfg.TaskbarKeyFound ? Path.GetFileName(configPath) : "по умолчанию";
 
         Diag.Log($"Конфиг: {(cfg.Exists ? configPath : configPath + " — ФАЙЛА НЕТ, значения по умолчанию")}");
         Diag.Log($"Настройки: port={cfgPort}, index={cfgIndex}, ver={cfgVer}, timeout={cfgTimeout} с, " +
-                 $"poll={cfgPoll} мс, showDiag={(cfgShowDiag ? "true" : "false")} (источник: {diagSource})");
+                 $"poll={cfgPoll} мс, showDiag={(cfgShowDiag ? "true" : "false")} (источник: {diagSource}), " +
+                 $"taskbar={(cfgTaskbar ? "true" : "false")} (источник: {taskbarSource})");
         if (!string.IsNullOrWhiteSpace(cfgWarning))
             Diag.Log("ВНИМАНИЕ: " + cfgWarning);
 
         if (printSettings)
         {
             PrintSettings(configPath, cfg, cfgDevId, cfgIp, cfgPort, cfgIndex, cfgTimeout, cfgPoll, cfgVer,
-                cfgShowDiag, showDiagFlag);
+                cfgShowDiag, showDiagFlag, cfgTaskbar, taskbarFlag);
             return 0;
         }
 
@@ -145,7 +155,8 @@ class Program
 
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new MainForm(devId, localKey, ip, port, index, timeoutSec, cfgBtnOn, cfgBtnOff, cfgVer, cfgPoll, cfgShowDiag));
+            Application.Run(new MainForm(devId, localKey, ip, port, index, timeoutSec, cfgBtnOn, cfgBtnOff, cfgVer, cfgPoll,
+                cfgShowDiag, cfgTaskbar));
             return 0;
         }
 
@@ -241,7 +252,8 @@ class Program
     /// что из него взято и будет ли видна кнопка «Диагностика (журнал)».
     /// </summary>
     static void PrintSettings(string configPath, AppConfig cfg, string? devId, string? ip, int port, int index,
-        int timeoutSec, int pollMs, string ver, bool showDiag, bool? showDiagFlag)
+        int timeoutSec, int pollMs, string ver, bool showDiag, bool? showDiagFlag,
+        bool taskbar, bool? taskbarFlag)
     {
         string diagSource = showDiagFlag.HasValue
             ? "командная строка (" + (showDiagFlag.Value ? "--show-diag" : "--no-diag") + ")"
@@ -260,6 +272,15 @@ class Program
         Console.WriteLine("Кнопка «Диагностика (журнал)»:");
         Console.WriteLine($"  {(showDiag ? "ПОКАЗАНА" : "СКРЫТА")}   (источник: {diagSource})");
         Console.WriteLine("  скрыть: \"showDiag\": false в smartrelay.json рядом с exe или ключ --no-diag");
+        Console.WriteLine();
+        Console.WriteLine("Значок в трее и панель задач:");
+        Console.WriteLine("  трей:      ЗНАЧОК ЕСТЬ ВСЕГДА (двойной щелчок — показать/скрыть окно)");
+        string taskbarWhere = taskbarFlag.HasValue
+            ? "командная строка (" + (taskbarFlag.Value ? "--taskbar" : "--no-taskbar") + ")"
+            : cfg.TaskbarKeyFound ? Path.GetFileName(configPath) : "значение по умолчанию";
+        Console.WriteLine($"  панель задач: {(taskbar ? "ДА, окно видно и на панели задач" : "НЕТ, только трей")}   (источник: {taskbarWhere})");
+        Console.WriteLine("  изменить: \"taskbar\": false (или true) в smartrelay.json рядом с exe, ключи --no-taskbar / --taskbar");
+        Console.WriteLine($"  значок:   {AppIcon.SourcePath ?? "smartrelay.bmp рядом с exe не найден — стандартный значок"}");
         if (!string.IsNullOrWhiteSpace(cfg.Warning))
             Console.WriteLine("  ВНИМАНИЕ: " + cfg.Warning);
         Console.WriteLine();
@@ -269,6 +290,7 @@ class Program
         // настройки всё равно можно посмотреть в файле
         Diag.Log($"--settings: конфиг {configPath} (найден: {(cfg.Exists ? "да" : "нет")}), " +
                  $"showDiag={(showDiag ? "true" : "false")} (источник: {diagSource})");
+        Diag.Log($"--settings: taskbar={(taskbar ? "true" : "false")}, значок: {AppIcon.SourcePath ?? "стандартный"}");
     }
 
     static void PrintVersion()
@@ -284,7 +306,9 @@ class Program
         Console.WriteLine(AppInfo.ShortLine);
         Console.WriteLine();
         Console.WriteLine("ГУИ (по умолчанию, без аргументов):");
-        Console.WriteLine("  SmartRelay.exe              окно с кнопками ВКЛ / ВЫКЛ и диагностикой");
+        Console.WriteLine("  SmartRelay.exe              окно с кнопками ВКЛ / ВЫКЛ и диагностикой;");
+        Console.WriteLine("                              значок в трее остаётся, крестик прячет окно в трей,");
+        Console.WriteLine("                              полный выход — «Выход» в меню значка");
         Console.WriteLine();
         Console.WriteLine("Режимы командной строки:");
         Console.WriteLine("  SmartRelay.exe [опции] on|off|status|toggle");
@@ -300,6 +324,8 @@ class Program
         Console.WriteLine("  --config    Путь к JSON-конфигу (по умолчанию smartrelay.json рядом с exe)");
         Console.WriteLine("  --no-diag   Скрыть кнопку «Диагностика (журнал)» (то же, что \"showDiag\": false)");
         Console.WriteLine("  --show-diag Показать кнопку диагностики, даже если в конфиге false");
+        Console.WriteLine("  --no-taskbar Окно только в трее, без кнопки на панели задач (то же, что taskbar=false)");
+        Console.WriteLine("  --taskbar   Показывать окно и на панели задач, и в трее (по умолчанию)");
         Console.WriteLine("  --settings  Показать действующие настройки (путь к конфигу, будет ли кнопка диагностики)");
         Console.WriteLine("  --verbose   Подробный журнал с hex-дампами кадров");
         Console.WriteLine("  --version   Версия программы, лицензия и авторы (архитектор/исполнитель)");
@@ -324,6 +350,7 @@ class Program
         Console.WriteLine("    \"ver\": \"3.4\",");
         Console.WriteLine("    \"poll\": 3000,");
         Console.WriteLine("    \"showDiag\": true,");
+        Console.WriteLine("    \"taskbar\": true,");
         Console.WriteLine("    \"architect\": \"avk013\",");
         Console.WriteLine("    \"executor\": \"Cline (AI coding agent) mokoki\",");
         Console.WriteLine("    \"btnOnText\": \"ВКЛ\",");

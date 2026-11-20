@@ -111,6 +111,50 @@ Resolve("файла нет — видна по умолчанию", AppConfig.Lo
 Resolve("--no-diag сильнее файла", onCfg, false, false);
 Resolve("--show-diag сильнее файла", offCfg, true, true);
 
+
+// Панель задач: программа живёт в трее всегда, панель задач включается ключом taskbar
+Case("taskbar=false — только трей", "{\"taskbar\": false}", c => Eq(false, c.Taskbar ?? true, "Taskbar"));
+Case("Taskbar (регистр) тоже работает", "{\"Taskbar\": false}", c => Eq(false, c.Taskbar ?? true, "Taskbar"));
+Case("синоним inTaskbar", "{\"inTaskbar\": false}", c => Eq(false, c.Taskbar ?? true, "Taskbar"));
+Case("синоним showInTaskbar строкой", "{\"showInTaskbar\": \"false\"}", c => Eq(false, c.Taskbar ?? true, "Taskbar"));
+Case("taskbar=0 = false", "{\"taskbar\": 0}", c => Eq(false, c.Taskbar ?? true, "Taskbar"));
+Case("taskbar=1 = true", "{\"taskbar\": 1}", c => Eq(true, c.Taskbar ?? false, "Taskbar"));
+Case("taskbar=true", "{\"taskbar\": true}", c => Eq(true, c.Taskbar ?? false, "Taskbar"));
+Case("ключа taskbar нет — null (по умолчанию панель задач есть)", "{\"ip\": \"10.0.0.5\"}", c => Eq(null, c.Taskbar, "Taskbar"));
+Case("taskbar найден — TaskbarKeyFound", "{\"taskbar\": false}", c =>
+{
+    if (!c.TaskbarKeyFound) throw new Exception("TaskbarKeyFound=false");
+});
+Case("ключа нет — TaskbarKeyFound=false", "{\"ip\": \"1.1.1.1\"}", c =>
+{
+    if (c.TaskbarKeyFound) throw new Exception("TaskbarKeyFound=true");
+});
+
+// Итоговое решение (AppConfig.ResolveTaskbar) — то, что вызывает Program.Main
+void ResolveTaskbar(string name, AppConfig? cfg, bool? flag, bool expected)
+{
+    bool actual = AppConfig.ResolveTaskbar(cfg, flag);
+    if (actual == expected)
+        Console.WriteLine($"OK   {name}");
+    else
+    {
+        failed++;
+        Console.WriteLine($"FAIL {name}: ожидалось {expected}, получено {actual}");
+    }
+}
+
+File.WriteAllText(cfgPath, "{\"taskbar\": false}");
+var trayOnlyCfg = AppConfig.Load(cfgPath);
+File.WriteAllText(cfgPath, "{\"taskbar\": true}");
+var taskbarCfg = AppConfig.Load(cfgPath);
+
+ResolveTaskbar("файл false — только трей", trayOnlyCfg, null, false);
+ResolveTaskbar("файл true — панель задач есть", taskbarCfg, null, true);
+ResolveTaskbar("ключа нет — по умолчанию панель задач есть", emptyCfg, null, true);
+ResolveTaskbar("файла нет — по умолчанию панель задач есть", AppConfig.Load(Path.Combine(dir, "nope.json")), null, true);
+ResolveTaskbar("--no-taskbar сильнее файла", taskbarCfg, false, false);
+ResolveTaskbar("--taskbar сильнее файла", trayOnlyCfg, true, true);
+
 Directory.Delete(dir, true);
 Console.WriteLine(failed == 0 ? "\nВСЕ ТЕСТЫ ПРОЙДЕНЫ" : $"\nПРОВАЛЕНО: {failed}");
 return failed == 0 ? 0 : 1;

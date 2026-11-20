@@ -9,9 +9,9 @@
     <Nullable>enable</Nullable>
 
     <!-- Версия и сведения о программе: попадают в окно «О программе» и в свойства exe -->
-    <Version>5.0.5</Version>
-    <AssemblyVersion>5.0.5</AssemblyVersion>
-    <FileVersion>5.0.5</FileVersion>
+    <Version>6.0.0</Version>
+    <AssemblyVersion>6.0.0</AssemblyVersion>
+    <FileVersion>6.0.0</FileVersion>
     <Product>SmartRelay</Product>
     <Company>avk013</Company>
     <Copyright>© 2026 avk013 · лицензия MIT</Copyright>
@@ -28,6 +28,11 @@
   <ItemGroup>
     <!-- шаблон конфига кладём рядом с exe, чтобы его было легко скопировать в smartrelay.json -->
     <None Update="smartrelay.json.example">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
+    <!-- значок программы: окно и трей берут картинку рядом с exe (AppIcon.cs), .ico не нужен -->
+    <None Update="smartrelay.bmp;smartrealy.bmp;smartleray.bmp;smartrelay.png;smartrelay.ico">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </None>

@@ -8,6 +8,7 @@
   "ver": "3.4",
   "poll": 3000,
   "showDiag": true,
+  "taskbar": true,
   "architect": "avk013",
   "executor": "Cline (AI coding agent) mokoki",
   "btnOnText": "ВКЛ",

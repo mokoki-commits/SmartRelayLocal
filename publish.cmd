@@ -14,6 +14,7 @@ publish\win-x64\SmartRelay.exe --version
 echo.
 echo Готово: папка publish\win-x64
 echo Скопируйте её целиком и положите рядом свой smartrelay.json
+echo Файл smartrelay.bmp в этой папке — значок окна и трея; не удаляйте его
 goto end
 
 :fail

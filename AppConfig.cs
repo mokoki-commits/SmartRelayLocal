@@ -39,11 +39,27 @@ public sealed class AppConfig
     public bool ShowDiagKeyFound { get; private set; }
 
     /// <summary>
+    /// Показывать окно ещё и на панели задач: true — окно и в трее, и на панели задач;
+    /// false — только значок в трее. null — ключа нет в конфиге.
+    /// </summary>
+    public bool? Taskbar { get; private set; }
+
+    /// <summary>Был ли в файле ключ про панель задач (для журнала).</summary>
+    public bool TaskbarKeyFound { get; private set; }
+
+    /// <summary>
     /// Итоговое решение о кнопке диагностики: флаг командной строки важнее файла,
     /// файл важнее значения по умолчанию (true). Вынесено из Program, чтобы проверялось тестами.
     /// </summary>
     public static bool ResolveShowDiag(AppConfig? cfg, bool? commandLineFlag)
         => commandLineFlag ?? cfg?.ShowDiag ?? true;
+
+    /// <summary>
+    /// Итоговое решение о панели задач: флаг командной строки важнее файла,
+    /// файл важнее значения по умолчанию (true — как было до появления трея).
+    /// </summary>
+    public static bool ResolveTaskbar(AppConfig? cfg, bool? commandLineFlag)
+        => commandLineFlag ?? cfg?.Taskbar ?? true;
 
     public string? Architect { get; private set; }
     public string? Executor { get; private set; }
@@ -107,6 +123,14 @@ public sealed class AppConfig
             else if (json.ContainsKey("showDiag") || json.ContainsKey("diag") || json.ContainsKey("hideDiag"))
             {
                 cfg.Warning = "Ключ настройки кнопки диагностики есть, но значение не true/false — оставлено true.";
+            }
+
+            // taskbar=false — окно только в трее; синонимы: inTaskbar, showInTaskbar.
+            bool? taskbar = GetBool(json, "taskbar") ?? GetBool(json, "inTaskbar") ?? GetBool(json, "showInTaskbar");
+            if (taskbar.HasValue)
+            {
+                cfg.Taskbar = taskbar.Value;
+                cfg.TaskbarKeyFound = true;
             }
         }
         catch (Exception ex)

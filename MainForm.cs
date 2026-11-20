@@ -35,6 +35,20 @@ public class MainForm : Form
     private readonly bool _showDiag;
     private readonly int _pollMs;
 
+    /// <summary>Показывать окно ещё и на панели задач (false — только значок в трее).</summary>
+    private readonly bool _taskbar;
+
+    /// <summary>Значок в области уведомлений: программа всегда доступна из трея.</summary>
+    private readonly NotifyIcon _tray;
+    private readonly ToolStripMenuItem _trayShowItem;
+    private readonly ToolStripMenuItem _trayStateItem;
+    private readonly ToolStripMenuItem _trayOnItem;
+    private readonly ToolStripMenuItem _trayOffItem;
+
+    /// <summary>Выход разрешён только из меню трея, иначе крестик прячет окно в трей.</summary>
+    private bool _exitRequested;
+    private bool _balloonShown;
+
     /// <summary>
     /// Последнее известное состояние: файл рядом с exe. Нужен, чтобы после
     /// перезапуска показать реальное время переключения, а не время старта.
@@ -49,8 +63,10 @@ public class MainForm : Form
 
     public MainForm(string devId, string localKey, string ip, int port, int index, int timeoutSec,
         string btnOnText, string btnOffText, string version = "3.4", int pollMs = 3000,
-        bool showDiag = true)
+        bool showDiag = true, bool showInTaskbar = true)
     {
+        _taskbar = showInTaskbar;
+
         _plug = new SmartPlug(devId, localKey, ip, port, index, timeoutSec, version);
         Diag.Log($"Опрос состояния: {(pollMs > 0 ? $"каждые {pollMs} мс" : "выключен (poll=0)")}");
 
@@ -120,23 +136,7 @@ public class MainForm : Form
             Font = new Font("Segoe UI", 9),
             FlatStyle = FlatStyle.System
         };
-        _btnDiag.Click += (_, _) =>
-        {
-            // Пока открыта диагностика, периодический опрос не нужен:
-            // он засоряет журнал и занимает единственное соединение.
-            bool wasPolling = _pollMs > 0;
-            _poll.Stop();
-            try
-            {
-                using var form = new DiagForm(_plug);
-                form.ShowDialog(this);
-            }
-            finally
-            {
-                if (wasPolling)
-                    _poll.Start();
-            }
-        };
+        _btnDiag.Click += (_, _) => ShowDiagnostics();
 
         Text = $"{AppInfo.Title} — управление розеткой";
         Size = new Size(361, showDiag ? 280 : 238);
@@ -144,6 +144,17 @@ public class MainForm : Form
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         Padding = new Padding(10);
+
+        // Значок окна и трея берётся из картинки рядом с exe (smartrelay.bmp).
+        if (AppIcon.Large != null)
+            Icon = AppIcon.Large;
+
+        // Панель задач задаётся конфигом: taskbar = true — окно и в трее, и на панели задач;
+        // false — только значок в трее. Значок в трее присутствует всегда.
+        ShowInTaskbar = _taskbar;
+        Diag.Log(_taskbar
+            ? "Окно: показано и на панели задач, и в трее (taskbar=true)"
+            : "Окно: только значок в трее, на панели задач не показывается (taskbar=false)");
 
         // Кнопку диагностики можно скрыть в конфиге: "showDiag": false (или --no-diag).
         // Недостаточно Visible = false: если кнопку всё-таки добавить в окно, она может
@@ -164,11 +175,7 @@ public class MainForm : Form
             LinkColor = Color.SteelBlue,
             ActiveLinkColor = Color.MidnightBlue
         };
-        aboutLink.LinkClicked += (_, _) =>
-        {
-            using var form = new AboutForm();
-            form.ShowDialog(this);
-        };
+        aboutLink.LinkClicked += (_, _) => ShowAbout();
 
         _tip = new ToolTip { AutoPopDelay = 15000, InitialDelay = 400, ReshowDelay = 200 };
         _tip.SetToolTip(_stateLabel,
@@ -186,7 +193,44 @@ public class MainForm : Form
             Controls.Add(_btnDiag);   // при showDiag=false кнопки в окне нет вообще
         Controls.Add(aboutLink);
 
+        // ---- Значок в области уведомлений: программа доступна из трея всегда ----
+        _trayShowItem = new ToolStripMenuItem("Свернуть в трей", null, (_, _) => ToggleWindow());
+        _trayOnItem = new ToolStripMenuItem("Включить", null, async (_, _) => await SetRelayAsync(true));
+        _trayOffItem = new ToolStripMenuItem("Выключить", null, async (_, _) => await SetRelayAsync(false));
+        _trayStateItem = new ToolStripMenuItem("Состояние: проверяю…") { Enabled = false };
+
+        var trayMenu = new ContextMenuStrip();
+        trayMenu.Items.Add(_trayShowItem);
+        trayMenu.Items.Add(new ToolStripSeparator());
+        trayMenu.Items.Add(_trayOnItem);
+        trayMenu.Items.Add(_trayOffItem);
+        trayMenu.Items.Add(_trayStateItem);
+        trayMenu.Items.Add(new ToolStripSeparator());
+        if (_showDiag)
+        {
+            trayMenu.Items.Add(new ToolStripMenuItem("Диагностика (журнал)…", null, (_, _) =>
+            {
+                ShowMainWindow();
+                ShowDiagnostics();
+            }));
+        }
+        trayMenu.Items.Add(new ToolStripMenuItem("О программе…", null, (_, _) => ShowAbout()));
+        trayMenu.Items.Add(new ToolStripSeparator());
+        trayMenu.Items.Add(new ToolStripMenuItem("Выход", null, (_, _) => ExitApplication()));
+
+        _tray = new NotifyIcon
+        {
+            Icon = AppIcon.Small ?? SystemIcons.Application,
+            Text = AppInfo.Title,
+            Visible = true,
+            ContextMenuStrip = trayMenu
+        };
+        _tray.DoubleClick += (_, _) => ToggleWindow();
+        _tray.BalloonTipClicked += (_, _) => ShowMainWindow();
+        Diag.Log("Трей: значок создан, двойной щелчок — показать/скрыть окно, меню — команды и выход");
+
         LoadSavedState();
+        UpdateTrayText();
 
         _poll.Tick += async (_, _) => await PollAsync();
 
@@ -196,16 +240,136 @@ public class MainForm : Form
                 _poll.Start();   // poll=0 в конфиге — опрос только по нажатию кнопок
             await PollAsync();
         };
+        // Крестик и Alt+F4 не завершают программу: окно уходит в трей.
+        // Полный выход — «Выход» в меню значка.
+        FormClosing += (_, e) =>
+        {
+            if (_exitRequested || e.CloseReason != CloseReason.UserClosing)
+                return;
+            e.Cancel = true;
+            HideToTray();
+        };
+
+        // При taskbar=false кнопка «свернуть» тоже прячет окно в трей;
+        // при taskbar=true окно сворачивается на панель задач как обычно.
+        Resize += (_, _) =>
+        {
+            if (WindowState == FormWindowState.Minimized && !_taskbar)
+                HideToTray();
+        };
+
         FormClosed += (_, _) =>
         {
             _poll.Stop();
             _poll.Dispose();
             _plug.Dispose();
+            _tray.Visible = false;
+            _tray.Dispose();
         };
     }
 
     private bool TryBegin() => Interlocked.Exchange(ref _busy, 1) == 0;
     private void End() => Interlocked.Exchange(ref _busy, 0);
+
+    /// <summary>Окно сейчас видно пользователю (не спрятано в трей и не свёрнуто).</summary>
+    private bool IsWindowShown => Visible && WindowState != FormWindowState.Minimized;
+
+    /// <summary>Показать / спрятать окно по двойному щелчку на значке в трее.</summary>
+    private void ToggleWindow()
+    {
+        if (IsWindowShown)
+            HideToTray();
+        else
+            ShowMainWindow();
+    }
+
+    /// <summary>Вернуть окно из трея.</summary>
+    private void ShowMainWindow()
+    {
+        Show();
+        if (WindowState == FormWindowState.Minimized)
+            WindowState = FormWindowState.Normal;
+        Activate();
+        BringToFront();
+        UpdateTrayText();
+    }
+
+    /// <summary>Спрятать окно в трей (программа продолжает работать и опрашивать розетку).</summary>
+    private void HideToTray()
+    {
+        Hide();
+        UpdateTrayText();
+
+        if (_balloonShown)
+            return;
+
+        _balloonShown = true;
+        _tray.ShowBalloonTip(4000, AppInfo.Title,
+            _taskbar
+                ? "Программа осталась в трее и продолжает опрашивать розетку." + Environment.NewLine +
+                  "Двойной щелчок по значку — открыть окно, меню значка — команды и выход."
+                : "Программа свёрнута в трей и продолжает опрашивать розетку." + Environment.NewLine +
+                  "На панели задач её нет (taskbar=false). Двойной щелчок по значку — открыть окно.",
+            ToolTipIcon.Info);
+    }
+
+    /// <summary>Полный выход: только из меню значка в трее.</summary>
+    private void ExitApplication()
+    {
+        _exitRequested = true;
+        _tray.Visible = false;
+        Close();
+    }
+
+    /// <summary>
+    /// Подсказка и строка состояния в меню трея: видно текущее состояние и время
+    /// последнего переключения, даже когда окно спрятано.
+    /// </summary>
+    private void UpdateTrayText()
+    {
+        string state = _lastState.HasValue
+            ? (_lastState.Value
+                ? $"ВКЛ с {_stateSince:dd.MM.yyyy HH:mm}"
+                : $"ВЫКЛ с {_stateSince:dd.MM.yyyy HH:mm}")
+            : (_savedSince.HasValue
+                ? $"нет связи, последнее: {(_savedState == true ? "ВКЛ" : "ВЫКЛ")} с {_savedSince.Value:dd.MM.yyyy HH:mm}"
+                : "состояние неизвестно");
+
+        _trayStateItem.Text = "Состояние: " + state;
+        _trayShowItem.Text = IsWindowShown ? "Свернуть в трей" : "Показать окно";
+
+        // NotifyIcon.Text ограничен по длине — обрезаем, иначе Windows отбросит подсказку.
+        string text = $"{AppInfo.Product} {AppInfo.Version} — {state}";
+        _tray.Text = text.Length <= 63 ? text : text.Substring(0, 60) + "…";
+    }
+
+    /// <summary>Окно «О программе» (общее для ссылки в окне и пункта меню трея).</summary>
+    private void ShowAbout()
+    {
+        using var form = new AboutForm();
+        form.ShowDialog(this);
+    }
+
+    /// <summary>
+    /// Окно диагностики (общее для кнопки и меню трея).
+    /// Пока оно открыто, периодический опрос остановлен: он засоряет журнал
+    /// и занимает единственное соединение.
+    /// </summary>
+    private void ShowDiagnostics()
+    {
+        bool wasPolling = _pollMs > 0 && _poll.Enabled;
+        _poll.Stop();
+        try
+        {
+            using var form = new DiagForm(_plug);
+            form.ShowDialog(this);
+        }
+        finally
+        {
+            if (wasPolling)
+                _poll.Start();
+        }
+    }
 
     /// <summary>Читает сохранённое состояние (если файл есть и корректен).</summary>
     private void LoadSavedState()
@@ -297,6 +461,8 @@ public class MainForm : Form
         _btnOn.Enabled = false;
         _btnOff.Enabled = false;
         _btnDiag.Enabled = false;
+        _trayOnItem.Enabled = false;
+        _trayOffItem.Enabled = false;
 
         SetStatus(on ? "Выполняется включение…" : "Выполняется выключение…", Color.Blue);
 
@@ -327,6 +493,8 @@ public class MainForm : Form
             _btnOn.Enabled = true;
             _btnOff.Enabled = true;
             _btnDiag.Enabled = true;
+            _trayOnItem.Enabled = true;
+            _trayOffItem.Enabled = true;
             _plug.QuietLog = false;
             End();
         }
@@ -368,6 +536,7 @@ public class MainForm : Form
         _stateLabel.ForeColor = on ? OnColor : OffColor;
         _btnOn.BackColor = on ? OnColor : IdleOnColor;
         _btnOff.BackColor = on ? IdleOffColor : OffColor;
+        UpdateTrayText();
     }
 
     /// <summary>Связи нет: показываем последнее известное состояние и его время.</summary>
@@ -389,6 +558,8 @@ public class MainForm : Form
             _stateLabel.Text = "Нет связи · состояние неизвестно";
             _stateLabel.ForeColor = Color.Red;
         }
+
+        UpdateTrayText();
     }
 
     private void UpdateChecked()

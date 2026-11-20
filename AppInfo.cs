@@ -19,6 +19,11 @@ public static class AppInfo
     public const string LicenseFileName = "LICENSE";
     public const string Repository = "smartrelay-csharp";
 
+    /// <summary>Проект, по методам опроса и управления реле которого сделана программа.</summary>
+    public const string MethodsSource = "tinytuya";
+    public const string MethodsSourceUrl = "https://github.com/jasonacox/tinytuya";
+    public const string MethodsSourceNote = "Python-библиотека локального протокола Tuya (MIT)";
+
     public static string Version { get; } = ReadVersion();
 
     /// <summary>Архитектор решения (кто проектировал протокол/архитектуру).</summary>
@@ -54,8 +59,13 @@ public static class AppInfo
         $"Архитектор:    {Architect}" + Environment.NewLine +
         $"Исполнитель:   {Executor}" + Environment.NewLine +
         Environment.NewLine +
+        "Методы опроса и управления реле взяты из проекта:" + Environment.NewLine +
+        $"  {MethodsSource} — {MethodsSourceNote}" + Environment.NewLine +
+        $"  {MethodsSourceUrl}" + Environment.NewLine +
+        "Пакеты, handshake 3.4/3.1, DP-команды и формат кадров повторяют его схему;" + Environment.NewLine +
+        "код на C# написан самостоятельно, без сторонних библиотек." + Environment.NewLine +
+        Environment.NewLine +
         "Сторонние компоненты: .NET 7 / Windows Forms, System.Text.Json (MIT)." + Environment.NewLine +
-        "Протокол Tuya реализован самостоятельно, без сторонних библиотек." + Environment.NewLine +
         Environment.NewLine +
         "Файл конфигурации: smartrelay.json; журнал: smartrelay.log.";
 
