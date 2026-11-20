@@ -9,9 +9,9 @@
     <Nullable>enable</Nullable>
 
     <!-- Версия и сведения о программе: попадают в окно «О программе» и в свойства exe -->
-    <Version>6.0.2</Version>
-    <AssemblyVersion>6.0.2</AssemblyVersion>
-    <FileVersion>6.0.2</FileVersion>
+    <Version>6.0.3</Version>
+    <AssemblyVersion>6.0.3</AssemblyVersion>
+    <FileVersion>6.0.3</FileVersion>
     <Product>SmartRelay</Product>
     <Company>avk013</Company>
     <Copyright>© 2026 avk013 · лицензия MIT</Copyright>
@@ -19,10 +19,9 @@
     <!-- значок файла SmartRelay.exe для Проводника и панели задач (кадры 16–256 в одном .ico) -->
     <ApplicationIcon>smartrelay.ico</ApplicationIcon>
     <!--
-      На Linux значок в exe не встраивается: перенос ресурсов в apphost умеет только Windows
-      (NETSDK1074). Там значок попадает в exe, здесь он остаётся отдельным файлом рядом с exe —
-      окно, трей и панель задач берут его из smartrelay.ico при запуске. Предупреждение гасим,
-      чтобы кросс-сборка оставалась без предупреждений.
+      SDK встраивает значок в apphost только сборкой на Windows и на Linux выдаёт NETSDK1074.
+      Предупреждение гасим, а ресурсы (значок, версия, манифест) переносим в exe сами — задача
+      PatchAppHostResources ниже, см. build/PatchAppHostResources.cs.
     -->
     <MSBuildWarningsAsMessages Condition="'$(OS)' != 'Windows_NT'">$(MSBuildWarningsAsMessages);NETSDK1074</MSBuildWarningsAsMessages>
   </PropertyGroup>
@@ -32,6 +31,10 @@
     <Compile Remove="tests/**" />
     <EmbeddedResource Remove="tests/**" />
     <None Remove="tests/**" />
+    <!-- build/ — код MSBuild-задач, компилируется самим MSBuild, в сборку приложения не входит -->
+    <Compile Remove="build/**" />
+    <EmbeddedResource Remove="build/**" />
+    <None Remove="build/**" />
   </ItemGroup>
 
   <ItemGroup>
@@ -96,4 +99,35 @@
     <SetGuiSubsystem TargetFile="$(PublishDir)$(AssemblyName).exe" />
   </Target>
 
+  <!--
+    Кросс-сборка на Linux/macOS: значок, версия и манифест попадают только в SmartRelay.dll,
+    а apphost exe остаётся без ресурсов (SDK умеет встраивать их лишь на Windows, NETSDK1074) —
+    в Проводнике такой exe выглядит «безликим». Задача ниже дописывает в exe секцию .rsrc из dll.
+    На Windows она ничего не делает: там ресурсы уже встроены самим SDK.
+  -->
+  <UsingTask TaskName="PatchAppHostResources"
+             TaskFactory="RoslynCodeTaskFactory"
+             AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <AppHostPath ParameterType="System.String" Required="true" />
+      <ManagedAssemblyPath ParameterType="System.String" Required="true" />
+    </ParameterGroup>
+    <Task>
+      <Code Type="Class" Language="cs" Source="$([MSBuild]::NormalizePath('$(MSBuildProjectDirectory)', 'build', 'PatchAppHostResources.cs'))" />
+    </Task>
+  </UsingTask>
+
+  <Target Name="PatchAppHostResourcesBuild" AfterTargets="Build"
+          Condition="'$(OS)' != 'Windows_NT' And Exists('$(TargetDir)$(AssemblyName).exe')">
+    <PatchAppHostResources AppHostPath="$(TargetDir)$(AssemblyName).exe"
+                           ManagedAssemblyPath="$(TargetDir)$(AssemblyName).dll" />
+  </Target>
+
+  <Target Name="PatchAppHostResourcesPublish" AfterTargets="Publish"
+          Condition="'$(OS)' != 'Windows_NT' And '$(PublishDir)' != '' And Exists('$(PublishDir)$(AssemblyName).exe')">
+    <PatchAppHostResources AppHostPath="$(PublishDir)$(AssemblyName).exe"
+                           ManagedAssemblyPath="$(PublishDir)$(AssemblyName).dll" />
+  </Target>
+
 </Project>
+
