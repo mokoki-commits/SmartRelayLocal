@@ -32,6 +32,7 @@ public class MainForm : Form
     private readonly Button _btnDiag;
     private readonly System.Windows.Forms.Timer _poll;
     private readonly ToolTip _tip;
+    private readonly bool _showDiag;
     private readonly int _pollMs;
 
     /// <summary>
@@ -144,8 +145,15 @@ public class MainForm : Form
         MaximizeBox = false;
         Padding = new Padding(10);
 
-        // кнопку диагностики можно скрыть в конфиге: "showDiag": false
+        // Кнопку диагностики можно скрыть в конфиге: "showDiag": false (или --no-diag).
+        // Недостаточно Visible = false: если кнопку всё-таки добавить в окно, она может
+        // появиться (например, при смене темы/пересоздании окна). Поэтому при showDiag = false
+        // кнопка вообще не попадает в Controls и физически не может быть показана.
+        _showDiag = showDiag;
         _btnDiag.Visible = showDiag;
+        Diag.Log(showDiag
+            ? "Кнопка «Диагностика»: показана (showDiag=true)"
+            : "Кнопка «Диагностика»: скрыта (showDiag=false)");
 
         var aboutLink = new LinkLabel
         {
@@ -174,7 +182,8 @@ public class MainForm : Form
         Controls.Add(_btnOn);
         Controls.Add(_btnOff);
         Controls.Add(_statusLabel);
-        Controls.Add(_btnDiag);
+        if (_showDiag)
+            Controls.Add(_btnDiag);   // при showDiag=false кнопки в окне нет вообще
         Controls.Add(aboutLink);
 
         LoadSavedState();
@@ -305,7 +314,9 @@ public class MainForm : Form
             if (result.Ok)
                 SetStatus(result.Message, result.Value.HasValue ? Color.Green : Color.DarkOrange);
             else
-                SetStatus("ОШИБКА: " + result.Message + "  Откройте «Диагностика (журнал)».", Color.Red);
+                SetStatus("ОШИБКА: " + result.Message +
+                          (_showDiag ? "  Откройте «Диагностика (журнал)»."
+                                     : "  Подробности: " + Diag.LogFile), Color.Red);
         }
         catch (Exception ex)
         {

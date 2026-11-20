@@ -35,6 +35,16 @@ public sealed class AppConfig
     /// <summary>Показывать кнопку «Диагностика (журнал)»; null — ключа нет в конфиге.</summary>
     public bool? ShowDiag { get; private set; }
 
+    /// <summary>Был ли в файле ключ, задающий видимость кнопки диагностики (для журнала).</summary>
+    public bool ShowDiagKeyFound { get; private set; }
+
+    /// <summary>
+    /// Итоговое решение о кнопке диагностики: флаг командной строки важнее файла,
+    /// файл важнее значения по умолчанию (true). Вынесено из Program, чтобы проверялось тестами.
+    /// </summary>
+    public static bool ResolveShowDiag(AppConfig? cfg, bool? commandLineFlag)
+        => commandLineFlag ?? cfg?.ShowDiag ?? true;
+
     public string? Architect { get; private set; }
     public string? Executor { get; private set; }
 
@@ -82,11 +92,22 @@ public sealed class AppConfig
             cfg.Architect = GetStr(json, "architect");
             cfg.Executor = GetStr(json, "executor");
 
+            // showDiag=false скрывает кнопку; diag — синоним, hideDiag=true — обратное по смыслу.
             bool? showDiag = GetBool(json, "showDiag") ?? GetBool(json, "diag");
             if (showDiag.HasValue)
+            {
                 cfg.ShowDiag = showDiag.Value;
-            else if (json.ContainsKey("showDiag") || json.ContainsKey("diag"))
-                cfg.Warning = "Ключ \"showDiag\" есть, но значение не true/false — оставлено true.";
+                cfg.ShowDiagKeyFound = true;
+            }
+            else if (GetBool(json, "hideDiag") is bool hide)
+            {
+                cfg.ShowDiag = !hide;
+                cfg.ShowDiagKeyFound = true;
+            }
+            else if (json.ContainsKey("showDiag") || json.ContainsKey("diag") || json.ContainsKey("hideDiag"))
+            {
+                cfg.Warning = "Ключ настройки кнопки диагностики есть, но значение не true/false — оставлено true.";
+            }
         }
         catch (Exception ex)
         {
@@ -135,6 +156,13 @@ public sealed class AppConfig
         if (el.ValueKind == JsonValueKind.False)
             return false;
 
-        return el.ValueKind == JsonValueKind.String && bool.TryParse(el.GetString(), out bool b) ? b : null;
+        // "true"/"false" строкой и 1/0 числом — так тоже пишут руками
+        if (el.ValueKind == JsonValueKind.String && bool.TryParse(el.GetString(), out bool b))
+            return b;
+
+        if (el.ValueKind == JsonValueKind.Number && el.TryGetInt32(out int num))
+            return num switch { 1 => true, 0 => false, _ => null };
+
+        return null;
     }
 }

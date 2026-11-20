@@ -38,10 +38,23 @@ Case("showDiag=true показывает", "{\"showDiag\": true}", c => Eq(true,
 Case("ключа нет — null (по умолчанию true)", "{\"ip\": \"10.0.0.5\"}", c => Eq(null, c.ShowDiag, "ShowDiag"));
 Case("комментарии // допустимы", "{ // настройки\n \"showDiag\": false }", c => Eq(false, c.ShowDiag ?? true, "ShowDiag"));
 Case("запятая перед } допустима", "{\"showDiag\": false, }", c => Eq(false, c.ShowDiag ?? true, "ShowDiag"));
-Case("число 0 не bool — предупреждение", "{\"showDiag\": 0}", c =>
+Case("число 0 = false", "{\"showDiag\": 0}", c => Eq(false, c.ShowDiag ?? true, "ShowDiag"));
+Case("число 1 = true", "{\"showDiag\": 1}", c => Eq(true, c.ShowDiag ?? false, "ShowDiag"));
+Case("hideDiag=true скрывает", "{\"hideDiag\": true}", c => Eq(false, c.ShowDiag ?? true, "ShowDiag"));
+Case("hideDiag=false показывает", "{\"hideDiag\": false}", c => Eq(true, c.ShowDiag ?? false, "ShowDiag"));
+Case("showDiag сильнее hideDiag", "{\"showDiag\": true, \"hideDiag\": true}", c => Eq(true, c.ShowDiag ?? false, "ShowDiag"));
+Case("непонятное значение — предупреждение", "{\"showDiag\": \"нет\"}", c =>
 {
     Eq(null, c.ShowDiag, "ShowDiag");
     if (c.Warning == null) throw new Exception("ожидалось предупреждение");
+});
+Case("ключ найден — ShowDiagKeyFound", "{\"showDiag\": false}", c =>
+{
+    if (!c.ShowDiagKeyFound) throw new Exception("ShowDiagKeyFound=false");
+});
+Case("ключа нет — ShowDiagKeyFound=false", "{\"ip\": \"1.1.1.1\"}", c =>
+{
+    if (c.ShowDiagKeyFound) throw new Exception("ShowDiagKeyFound=true");
 });
 Case("битый JSON — предупреждение, без исключения", "{ \"showDiag\": }", c =>
 {
@@ -69,6 +82,34 @@ Case("файла нет — Exists=false", "{}", _ => { });
 var missing = AppConfig.Load(Path.Combine(dir, "nope.json"));
 if (missing.Exists || missing.ShowDiag != null || missing.Warning != null) { failed++; Console.WriteLine("FAIL отсутствующий файл"); }
 else Console.WriteLine("OK   отсутствующий файл — значения по умолчанию");
+
+// Итоговое решение (AppConfig.ResolveShowDiag) — то, что вызывает Program.Main
+void Resolve(string name, AppConfig? cfg, bool? flag, bool expected)
+{
+    bool actual = AppConfig.ResolveShowDiag(cfg, flag);
+    if (actual == expected)
+        Console.WriteLine($"OK   {name}");
+    else
+    {
+        failed++;
+        Console.WriteLine($"FAIL {name}: ожидалось {expected}, получено {actual}");
+    }
+}
+
+string cfgPath = Path.Combine(dir, "cfg.json");
+File.WriteAllText(cfgPath, "{\"showDiag\": false}");
+var offCfg = AppConfig.Load(cfgPath);
+File.WriteAllText(cfgPath, "{\"showDiag\": true}");
+var onCfg = AppConfig.Load(cfgPath);
+File.WriteAllText(cfgPath, "{}");
+var emptyCfg = AppConfig.Load(cfgPath);
+
+Resolve("файл false — кнопка скрыта", offCfg, null, false);
+Resolve("файл true — кнопка видна", onCfg, null, true);
+Resolve("ключа нет — видна по умолчанию", emptyCfg, null, true);
+Resolve("файла нет — видна по умолчанию", AppConfig.Load(Path.Combine(dir, "nope.json")), null, true);
+Resolve("--no-diag сильнее файла", onCfg, false, false);
+Resolve("--show-diag сильнее файла", offCfg, true, true);
 
 Directory.Delete(dir, true);
 Console.WriteLine(failed == 0 ? "\nВСЕ ТЕСТЫ ПРОЙДЕНЫ" : $"\nПРОВАЛЕНО: {failed}");

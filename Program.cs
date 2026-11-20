@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace SmartRelay;
@@ -9,6 +10,10 @@ class Program
     [STAThread]
     static int Main(string[] args)
     {
+        // exe собран как GUI-приложение: без этого вывод командной строки (status, --version,
+        // --settings) не доходил бы до окна cmd/PowerShell.
+        AttachParentConsole();
+
         string? devId = null;
         string? localKey = null;
         string? ip = null;
@@ -22,6 +27,7 @@ class Program
         bool guiMode = true;
         bool verbose = false;
         bool? showDiagFlag = null;   // --no-diag / --show-diag перекрывают конфиг
+        bool printSettings = false;  // --settings: показать действующие настройки и выйти
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -37,6 +43,7 @@ class Program
                 case "--no-diag": case "--hide-diag": showDiagFlag = false; break;
                 case "--show-diag": showDiagFlag = true; break;
                 case "--verbose": case "-v": verbose = true; break;
+                case "--settings": case "--config-check": printSettings = true; guiMode = false; break;
                 case "on": case "off": case "status": case "toggle": case "diag":
                     action = args[i]; guiMode = false; break;
                 case "--gui": guiMode = true; break;
@@ -78,7 +85,8 @@ class Program
         cfgBtnOff = cfg.BtnOff ?? "ВЫКЛ";
         cfgVer = cfg.Ver ?? "3.4";
         cfgPoll = cfg.PollMs ?? 3000;
-        cfgShowDiag = cfg.ShowDiag ?? true;
+        // Кнопка диагностики: флаг командной строки важнее файла, файл важнее умолчания (true).
+        cfgShowDiag = AppConfig.ResolveShowDiag(cfg, showDiagFlag);
         cfgArchitect = cfg.Architect;
         cfgExecutor = cfg.Executor;
         cfgWarning = cfg.Warning;
@@ -91,17 +99,25 @@ class Program
                 "SmartRelay — конфигурация", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
 
-        if (showDiagFlag.HasValue)
-            cfgShowDiag = showDiagFlag.Value;
-
         AppInfo.Configure(cfgArchitect, cfgExecutor);
 
         Diag.Log(AppInfo.Summary);
-        Diag.Log($"Конфиг: {(File.Exists(configPath) ? configPath : "не найден, значения по умолчанию")}");
+        string diagSource = showDiagFlag.HasValue
+            ? "командная строка"
+            : cfg.ShowDiagKeyFound ? Path.GetFileName(configPath) : "по умолчанию";
+
+        Diag.Log($"Конфиг: {(cfg.Exists ? configPath : configPath + " — ФАЙЛА НЕТ, значения по умолчанию")}");
         Diag.Log($"Настройки: port={cfgPort}, index={cfgIndex}, ver={cfgVer}, timeout={cfgTimeout} с, " +
-                 $"poll={cfgPoll} мс, showDiag={(cfgShowDiag ? "true" : "false")}");
+                 $"poll={cfgPoll} мс, showDiag={(cfgShowDiag ? "true" : "false")} (источник: {diagSource})");
         if (!string.IsNullOrWhiteSpace(cfgWarning))
             Diag.Log("ВНИМАНИЕ: " + cfgWarning);
+
+        if (printSettings)
+        {
+            PrintSettings(configPath, cfg, cfgDevId, cfgIp, cfgPort, cfgIndex, cfgTimeout, cfgPoll, cfgVer,
+                cfgShowDiag, showDiagFlag);
+            return 0;
+        }
 
         devId ??= cfgDevId;
         localKey ??= cfgKey;
@@ -193,6 +209,68 @@ class Program
         }
     }
 
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool AttachConsole(int dwProcessId);
+
+    /// <summary>
+    /// Подключиться к консоли родительского процесса (cmd / PowerShell / Far).
+    /// Нужно потому, что SmartRelay — GUI-приложение (подсистема Windows), и без этого
+    /// строки Console.WriteLine уходят в никуда.
+    /// </summary>
+    private static void AttachParentConsole()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        try
+        {
+            if (!AttachConsole(-1))
+                return;
+
+            Console.SetOut(new StreamWriter(Console.OpenStandardOutput()) { AutoFlush = true });
+            Console.SetError(new StreamWriter(Console.OpenStandardError()) { AutoFlush = true });
+        }
+        catch
+        {
+            // консоли нет (запуск двойным щелчком) — это нормально
+        }
+    }
+
+    /// <summary>
+    /// Печать действующих настроек без обращения к розетке: какой файл прочитан,
+    /// что из него взято и будет ли видна кнопка «Диагностика (журнал)».
+    /// </summary>
+    static void PrintSettings(string configPath, AppConfig cfg, string? devId, string? ip, int port, int index,
+        int timeoutSec, int pollMs, string ver, bool showDiag, bool? showDiagFlag)
+    {
+        string diagSource = showDiagFlag.HasValue
+            ? "командная строка (" + (showDiagFlag.Value ? "--show-diag" : "--no-diag") + ")"
+            : cfg.ShowDiagKeyFound ? Path.GetFileName(configPath) : "значение по умолчанию";
+
+        Console.WriteLine(AppInfo.Summary);
+        Console.WriteLine();
+        Console.WriteLine("Конфиг:");
+        Console.WriteLine($"  файл:      {configPath}");
+        Console.WriteLine($"  найден:    {(cfg.Exists ? "да" : "НЕТ (действуют значения по умолчанию)")}");
+        Console.WriteLine($"  ip:        {ip ?? "не задан"}");
+        Console.WriteLine($"  dev_id:    {devId ?? "не задан"}");
+        Console.WriteLine($"  порт:      {port}   index: {index}   версия протокола: {ver}");
+        Console.WriteLine($"  таймаут:   {timeoutSec} с   опрос: {(pollMs > 0 ? pollMs + " мс" : "выключен")}");
+        Console.WriteLine();
+        Console.WriteLine("Кнопка «Диагностика (журнал)»:");
+        Console.WriteLine($"  {(showDiag ? "ПОКАЗАНА" : "СКРЫТА")}   (источник: {diagSource})");
+        Console.WriteLine("  скрыть: \"showDiag\": false в smartrelay.json рядом с exe или ключ --no-diag");
+        if (!string.IsNullOrWhiteSpace(cfg.Warning))
+            Console.WriteLine("  ВНИМАНИЕ: " + cfg.Warning);
+        Console.WriteLine();
+        Console.WriteLine("Журнал: " + Diag.LogFile);
+
+        // то же самое — в журнал: если вывод консоли не виден (запуск двойным щелчком),
+        // настройки всё равно можно посмотреть в файле
+        Diag.Log($"--settings: конфиг {configPath} (найден: {(cfg.Exists ? "да" : "нет")}), " +
+                 $"showDiag={(showDiag ? "true" : "false")} (источник: {diagSource})");
+    }
+
     static void PrintVersion()
     {
         Console.WriteLine(AppInfo.AboutText);
@@ -222,6 +300,7 @@ class Program
         Console.WriteLine("  --config    Путь к JSON-конфигу (по умолчанию smartrelay.json рядом с exe)");
         Console.WriteLine("  --no-diag   Скрыть кнопку «Диагностика (журнал)» (то же, что \"showDiag\": false)");
         Console.WriteLine("  --show-diag Показать кнопку диагностики, даже если в конфиге false");
+        Console.WriteLine("  --settings  Показать действующие настройки (путь к конфигу, будет ли кнопка диагностики)");
         Console.WriteLine("  --verbose   Подробный журнал с hex-дампами кадров");
         Console.WriteLine("  --version   Версия программы, лицензия и авторы (архитектор/исполнитель)");
         Console.WriteLine("  --gui       Запустить графическое окно");
