@@ -9,15 +9,22 @@
     <Nullable>enable</Nullable>
 
     <!-- Версия и сведения о программе: попадают в окно «О программе» и в свойства exe -->
-    <Version>6.0.1</Version>
-    <AssemblyVersion>6.0.1</AssemblyVersion>
-    <FileVersion>6.0.1</FileVersion>
+    <Version>6.0.2</Version>
+    <AssemblyVersion>6.0.2</AssemblyVersion>
+    <FileVersion>6.0.2</FileVersion>
     <Product>SmartRelay</Product>
     <Company>avk013</Company>
     <Copyright>© 2026 avk013 · лицензия MIT</Copyright>
     <Description>Локальное управление розеткой SmartLife / Tuya по LAN (протокол 3.4 / 3.1)</Description>
     <!-- значок файла SmartRelay.exe для Проводника и панели задач (кадры 16–256 в одном .ico) -->
     <ApplicationIcon>smartrelay.ico</ApplicationIcon>
+    <!--
+      На Linux значок в exe не встраивается: перенос ресурсов в apphost умеет только Windows
+      (NETSDK1074). Там значок попадает в exe, здесь он остаётся отдельным файлом рядом с exe —
+      окно, трей и панель задач берут его из smartrelay.ico при запуске. Предупреждение гасим,
+      чтобы кросс-сборка оставалась без предупреждений.
+    -->
+    <MSBuildWarningsAsMessages Condition="'$(OS)' != 'Windows_NT'">$(MSBuildWarningsAsMessages);NETSDK1074</MSBuildWarningsAsMessages>
   </PropertyGroup>
 
   <ItemGroup>
